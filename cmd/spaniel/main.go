@@ -1,3 +1,4 @@
+// Command spaniel renders a stored trace as JSON.
 package main
 
 import (

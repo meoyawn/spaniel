@@ -1,3 +1,4 @@
+// Package spaniel receives, stores, validates, and renders OpenTelemetry traces.
 package spaniel
 
 import (
@@ -16,18 +17,22 @@ const (
 	outputFormatJaegerValue = "jaeger"
 )
 
+// OutputFormat selects the JSON representation emitted by ReadTraceJSON.
 type OutputFormat struct {
 	value string
 }
 
+// NewOutputFormatGCX returns the GCX trace output format.
 func NewOutputFormatGCX() OutputFormat {
 	return OutputFormat{value: outputFormatGCXValue}
 }
 
+// NewOutputFormatJaeger returns the Jaeger trace output format.
 func NewOutputFormatJaeger() OutputFormat {
 	return OutputFormat{value: outputFormatJaegerValue}
 }
 
+// NewOutputFormatFromValue parses a supported trace output format name.
 func NewOutputFormatFromValue(value string) (OutputFormat, error) {
 	switch value {
 	case outputFormatGCXValue:
@@ -43,6 +48,7 @@ func (format OutputFormat) String() string {
 	return format.value
 }
 
+// ReadTraceJSON reads a stored trace and renders it in the requested format.
 func ReadTraceJSON(ctx context.Context, databasePath string, format OutputFormat, traceIDValue string) ([]byte, error) {
 	if databasePath == "" {
 		databasePath = DefaultDatabasePath()

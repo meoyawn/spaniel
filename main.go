@@ -26,6 +26,7 @@ const (
 	traceIDLength           = 32
 )
 
+// DefaultDatabasePath returns the configured default SQLite database path.
 func DefaultDatabasePath() string {
 	if databasePath := os.Getenv(databasePathEnvironment); databasePath != "" {
 		return databasePath
@@ -33,11 +34,13 @@ func DefaultDatabasePath() string {
 	return defaultDatabasePath
 }
 
+// Config controls a Spaniel HTTP server.
 type Config struct {
 	DatabasePath string
 	MaxBodyBytes int64
 }
 
+// Diagnostic records a rejected, incomplete, or otherwise noteworthy trace condition.
 type Diagnostic struct {
 	ID      int64  `json:"id"`
 	Kind    string `json:"kind"`
@@ -80,15 +83,16 @@ type serverHandler struct {
 	store        *store
 }
 
+// NewServer constructs a Spaniel HTTP server listening on addr.
 func NewServer(addr string, config Config) (*http.Server, error) {
 	if addr == "" {
-		return nil, fmt.Errorf("Spaniel listener address %q is empty", addr)
+		return nil, fmt.Errorf("spaniel listener address %q is empty", addr)
 	}
 	if config.DatabasePath == "" {
 		config.DatabasePath = DefaultDatabasePath()
 	}
 	if config.MaxBodyBytes < 0 {
-		return nil, fmt.Errorf("Spaniel max body bytes %d is negative", config.MaxBodyBytes)
+		return nil, fmt.Errorf("spaniel max body bytes %d is negative", config.MaxBodyBytes)
 	}
 	if config.MaxBodyBytes == 0 {
 		config.MaxBodyBytes = defaultMaxBodyBytes

@@ -1,0 +1,164 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  relative-path-mode: gomod
+
+linters:
+  default: all
+  enable:
+    - gosec
+    - nilnil
+    - noctx
+    - wrapcheck
+  disable:
+    # Linters for dependencies Spaniel does not use.
+    - arangolint
+    - clickhouselint
+    - ginkgolinter
+    - loggercheck
+    - protogetter
+    - rowserrcheck
+    - sloglint
+    - spancheck
+    - sqlclosecheck
+    - unqueryvet
+    - zerologlint
+    # Checks not adopted for the current code shape.
+    - cyclop
+    - err113
+    - exhaustive
+    # Subjective or project-policy checks not adopted by Spaniel.
+    - depguard
+    - exhaustruct
+    - forbidigo
+    - funlen
+    - gochecknoglobals
+    - goconst
+    - goheader
+    - goprintffuncname
+    - lll
+    - mnd
+    - nestif
+    - nlreturn
+    - noinlineerr
+    - perfsprint
+    - prealloc
+    - tagliatelle
+    - testifylint
+    - testpackage
+    - varnamelen
+    # The codebase intentionally mixes receiver types where required by APIs.
+    - recvcheck
+    - wsl
+    - wsl_v5
+    # Deprecated in favor of gomoddirectives.
+    - gomodguard
+    - gomodguard_v2
+  exclusions:
+    warn-unused: true
+    rules:
+      # Diagnostics are deliberately persisted by a background writer even after
+      # the request context is canceled.
+      - path: ^(main|storage)\.go$
+        linters:
+          - contextcheck
+        text: addDiagnostic.*context parameter
+      # Closing HTTP response bodies and SQL rows is best-effort at these
+      # boundaries; the response/query result is still consumed and checked.
+      - path: ^(e2e/)?main_test\.go$
+        linters:
+          - errcheck
+        text: response\.Body\.Close
+      - path: ^cmd/spaniel-server/main\.go$
+        linters:
+          - errcheck
+        text: response\.Body\.Close
+      - path: ^storage\.go$
+        linters:
+          - errcheck
+        text: (rows|diagnosticRows)\.Close
+      # The JSON response writer and test request fixtures intentionally discard
+      # encoding errors after the HTTP response has been committed.
+      - path: ^main\.go$
+        linters:
+          - errchkjson
+        text: Encoder.*Encode
+      - path: ^main_test\.go$
+        linters:
+          - errchkjson
+        text: json\.Marshal
+      # This assertion is against the standard transport type in a test helper.
+      - path: ^main_test\.go$
+        linters:
+          - forcetypeassert
+        text: right hand must be only type assertion
+      # commitNow is an intentionally centralized transaction state machine;
+      # splitting it only to satisfy a complexity threshold would obscure the
+      # atomic write boundary.
+      - path: ^storage\.go$
+        linters:
+          - gocognit
+        text: cognitive complexity
+      # E2E subprocesses use fixed test commands and paths by design.
+      - path: ^e2e/.*\.go$
+        linters:
+          - gosec
+        text: G204
+      # Tests use short-lived clients/listeners, while the storage writer is an
+      # asynchronous worker whose operations intentionally outlive request ctx.
+      - path: ^(e2e/)?main_test\.go$
+        linters:
+          - noctx
+        text: (\(\*net/http\.Client\)\.Get|net\.Listen)
+      - path: ^storage\.go$
+        linters:
+          - noctx
+        text: database/sql
+      # These tests intentionally run serially because they exercise shared
+      # command/default-path and graph-validation behavior.
+      - path: ^e2e/main_test\.go$
+        linters:
+          - paralleltest
+        text: TestCommandsShareDefaultSQLitePathAndGCXFormat
+      - path: ^main_test\.go$
+        linters:
+          - paralleltest
+          - tparallel
+        text: TestSelfParentAndCyclesFailGraphValidation
+      # These helpers intentionally record diagnostics independently of callers'
+      # cancellation and preserve low-level errors at package boundaries.
+      - path: ^(main|storage|format)\.go$
+        linters:
+          - wrapcheck
+        text: error returned from (external package is unwrapped|interface method should be wrapped)
+      - path: ^cmd/spaniel/main\.go$
+        linters:
+          - wrapcheck
+        text: error returned from external package is unwrapped
+      # These test-only helper parameters are fixed by the fixture contract.
+      - path: ^main_test\.go$
+        linters:
+          - unparam
+        text: (startTestServer|testTracesWithParent)
+  settings:
+    staticcheck:
+      checks:
+        - all
+        # Public package comments are not currently normalized to ST1020/ST1021.
+        - -ST1020
+        - -ST1021
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: strict
+    warn-unused: true

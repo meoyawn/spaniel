@@ -1,3 +1,4 @@
+// Command spaniel-server serves the Spaniel trace receiver and query API.
 package main
 
 import (
@@ -70,7 +71,7 @@ func checkHealth(rawURL string) error {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Spaniel health URL %q status = %d, want %d", rawURL, response.StatusCode, http.StatusOK)
+		return fmt.Errorf("spaniel health URL %q status = %d, want %d", rawURL, response.StatusCode, http.StatusOK)
 	}
 	return nil
 }

@@ -3,3 +3,4 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+.task/

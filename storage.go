@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -17,7 +18,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Register the SQLite database driver.
 )
 
 const (
@@ -542,7 +543,7 @@ func validateGraph(record *traceRecord, allowedExternalParents map[string]bool) 
 		current := start
 		for current != "" && !allowedExternalParents[current] {
 			if offset, ok := path[current]; ok {
-				cycle := append(chain[offset:], current)
+				cycle := append(slices.Clone(chain[offset:]), current)
 				span := record.spans[start].normalized
 				return nil, &Diagnostic{Kind: "parent_cycle", Message: "parent cycle: " + strings.Join(cycle, " -> "), TraceID: span.TraceID, SpanID: start}
 			}

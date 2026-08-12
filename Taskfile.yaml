@@ -52,11 +52,12 @@ tasks:
       - mod:download
     cmds:
       - gofmt -w .
-      - go vet ./...
+      - go tool golangci-lint run ./...
     sources:
       - ./**/*.go
       - go.mod
       - go.sum
+      - .golangci.yaml
 
   check:
     run: once
