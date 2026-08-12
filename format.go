@@ -45,7 +45,7 @@ func (format OutputFormat) String() string {
 
 func ReadTraceJSON(ctx context.Context, databasePath string, format OutputFormat, traceIDValue string) ([]byte, error) {
 	if databasePath == "" {
-		return nil, fmt.Errorf("Spaniel database path %q is empty", databasePath)
+		databasePath = DefaultDatabasePath()
 	}
 	traceID, err := canonicalTraceID(traceIDValue)
 	if err != nil {

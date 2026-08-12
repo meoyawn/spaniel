@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -94,6 +95,80 @@ func TestSQLiteServerAndTraceCLI(t *testing.T) {
 		if err := <-results; err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestCommandsShareDefaultSQLitePathAndGCXFormat(t *testing.T) {
+	temporaryDirectory := t.TempDir()
+	databasePath := filepath.Join(temporaryDirectory, "spaniel.sqlite")
+	serverBinary := filepath.Join(temporaryDirectory, "spaniel-server")
+	buildServer := exec.CommandContext(t.Context(), "go", "build", "-o", serverBinary, "./cmd/spaniel-server")
+	buildServer.Dir = ".."
+	if output, err := buildServer.CombinedOutput(); err != nil {
+		t.Fatalf("build Spaniel server CLI: %v: %s", err, output)
+	}
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	server := exec.CommandContext(t.Context(), serverBinary, "-addr", address)
+	server.Env = append(os.Environ(), "SPANIEL_DATABASE_PATH="+databasePath)
+	serverOutput := &bytes.Buffer{}
+	server.Stdout = serverOutput
+	server.Stderr = serverOutput
+	if err := server.Start(); err != nil {
+		t.Fatalf("start Spaniel server CLI: %v", err)
+	}
+	t.Cleanup(func() {
+		if server.Process != nil {
+			_ = server.Process.Signal(os.Interrupt)
+		}
+		_ = server.Wait()
+	})
+
+	origin := "http://" + address
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		response, requestErr := newClient().Get(origin + "/healthz")
+		if requestErr == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Spaniel server CLI did not become healthy: %s", serverOutput)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	ingestTrace(t, origin)
+
+	command := exec.CommandContext(t.Context(), "go", "run", "./cmd/spaniel", testTraceID)
+	command.Dir = ".."
+	command.Env = append(os.Environ(), "SPANIEL_DATABASE_PATH="+databasePath)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run default trace CLI: %v: %s", err, output)
+	}
+	var trace struct {
+		Batches []struct {
+			ScopeSpans []struct {
+				Spans []struct {
+					TraceID string `json:"traceId"`
+				} `json:"spans"`
+			} `json:"scopeSpans"`
+		} `json:"batches"`
+	}
+	decodeJSON(t, output, &trace)
+	if len(trace.Batches) != 1 || len(trace.Batches[0].ScopeSpans) != 1 ||
+		len(trace.Batches[0].ScopeSpans[0].Spans) != 1 ||
+		trace.Batches[0].ScopeSpans[0].Spans[0].TraceID != testTraceID {
+		t.Fatalf("default GCX trace = %s", output)
 	}
 }
 

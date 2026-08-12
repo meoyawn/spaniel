@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,11 +18,20 @@ import (
 )
 
 const (
-	defaultMaxBodyBytes = 16 << 20
-	defaultQueryTimeout = 30 * time.Second
-	readHeaderTimeout   = 5 * time.Second
-	traceIDLength       = 32
+	databasePathEnvironment = "SPANIEL_DATABASE_PATH"
+	defaultDatabasePath     = "/tmp/spaniel/spaniel.sqlite"
+	defaultMaxBodyBytes     = 16 << 20
+	defaultQueryTimeout     = 30 * time.Second
+	readHeaderTimeout       = 5 * time.Second
+	traceIDLength           = 32
 )
+
+func DefaultDatabasePath() string {
+	if databasePath := os.Getenv(databasePathEnvironment); databasePath != "" {
+		return databasePath
+	}
+	return defaultDatabasePath
+}
 
 type Config struct {
 	DatabasePath string
@@ -75,7 +85,7 @@ func NewServer(addr string, config Config) (*http.Server, error) {
 		return nil, fmt.Errorf("Spaniel listener address %q is empty", addr)
 	}
 	if config.DatabasePath == "" {
-		return nil, fmt.Errorf("Spaniel database path %q is empty", config.DatabasePath)
+		config.DatabasePath = DefaultDatabasePath()
 	}
 	if config.MaxBodyBytes < 0 {
 		return nil, fmt.Errorf("Spaniel max body bytes %d is negative", config.MaxBodyBytes)

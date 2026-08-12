@@ -1,7 +1,10 @@
 # Spaniel
 
-`spaniel` is a local OpenTelemetry trace receiver and SQLite trace store for
-deterministic end-to-end tests.
+`spaniel` is a small OpenTelemetry trace receiver built for fast debugging. It
+gathers distributed spans in SQLite and makes a complete trace available by ID
+immediately, without waiting for the indexing pipeline used by larger tracing
+systems such as Jaeger. The same lookup works for application traces and traces
+captured during deterministic end-to-end tests.
 
 Spaniel accepts OTLP/HTTP trace exports, writes spans to SQLite through one Go
 channel, and serves concurrent reads plus event-driven blocking queries. It
@@ -90,11 +93,13 @@ raw Tempo-compatible OpenTelemetry envelope with `batches`; `jaeger` returns
 the legacy query envelope for consumers expecting that schema.
 
 ```sh
-go run ./cmd/spaniel \
-  -db /path/to/spaniel.sqlite \
-  -format gcx \
-  0123456789abcdef0123456789abcdef
+go run ./cmd/spaniel 0123456789abcdef0123456789abcdef
 ```
+
+GCX JSON is the default output. Use `-format jaeger` only when a consumer needs
+the legacy Jaeger query envelope. Both commands default to the same SQLite file,
+`/tmp/spaniel/spaniel.sqlite`. Set `SPANIEL_DATABASE_PATH` or use `-db` for an
+explicit database path.
 
 ## Install
 
@@ -108,7 +113,7 @@ go install github.com/meoyawn/spaniel/cmd/spaniel-server@latest
 ## Run
 
 ```sh
-spaniel-server -addr 127.0.0.1:4318 -db /path/to/spaniel.sqlite
+spaniel-server -addr 127.0.0.1:4318
 ```
 
 Point an OTLP/HTTP exporter at `http://127.0.0.1:4318`. Spaniel accepts JSON
@@ -122,8 +127,9 @@ Run the complete check from the repository root:
 task check
 ```
 
-`NewServer` requires an explicit SQLite path and accepts a test-specific body
-size limit. A zero body-size value selects the bounded default.
+`NewServer` accepts an explicit SQLite path and a test-specific body size limit.
+An empty path selects the shared temporary default; a zero body-size value
+selects the bounded default.
 
 ## License
 

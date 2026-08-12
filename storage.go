@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -71,6 +73,9 @@ type store struct {
 }
 
 func newStore(databasePath string) (*store, error) {
+	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
+		return nil, fmt.Errorf("create SQLite directory for %q: %w", databasePath, err)
+	}
 	database, err := sql.Open("sqlite", databasePath)
 	if err != nil {
 		return nil, err
