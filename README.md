@@ -32,7 +32,7 @@ Example request:
   "traceId": "0123456789abcdef0123456789abcdef",
   "requiredSpans": [
     {
-      "serviceName": "listenbox-api",
+      "serviceName": "example-api",
       "name": "POST /session/shows",
       "minCount": 1
     }
