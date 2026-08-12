@@ -1,0 +1,66 @@
+version: 3
+
+env:
+  GOCACHE: "{{.HOME}}/.cache/go-build"
+
+tasks:
+  mod:download:
+    run: once
+    cmd: go mod download
+    sources:
+      - go.mod
+      - go.sum
+
+  build:linux:
+    run: once
+    deps:
+      - mod:download
+    env:
+      CGO_ENABLED: 0
+      GOOS: linux
+    cmd: go build -trimpath -buildvcs=false -o dist/spaniel-server ./cmd/spaniel-server
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - dist/spaniel-server
+
+  test:
+    run: once
+    deps:
+      - mod:download
+    cmd: go test . ./cmd/...
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+
+  test:e2e:
+    run: once
+    deps:
+      - mod:download
+    cmd: go test -count=1 ./e2e
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+
+  lint:
+    run: once
+    deps:
+      - mod:download
+    cmds:
+      - gofmt -w .
+      - go vet ./...
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+
+  check:
+    run: once
+    deps:
+      - lint
+      - test
+      - test:e2e
