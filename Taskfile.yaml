@@ -20,6 +20,7 @@ tasks:
       GOOS: linux
     cmd: go build -trimpath -buildvcs=false -o dist/spaniel-server ./cmd/spaniel-server
     sources:
+      - ./*.go
       - ./**/*.go
       - go.mod
       - go.sum
@@ -32,6 +33,7 @@ tasks:
       - mod:download
     cmd: go test . ./cmd/...
     sources:
+      - ./*.go
       - ./**/*.go
       - go.mod
       - go.sum
@@ -42,6 +44,7 @@ tasks:
       - mod:download
     cmd: go test -count=1 ./e2e
     sources:
+      - ./*.go
       - ./**/*.go
       - go.mod
       - go.sum
@@ -54,6 +57,7 @@ tasks:
       - gofmt -w .
       - go tool golangci-lint run ./...
     sources:
+      - ./*.go
       - ./**/*.go
       - go.mod
       - go.sum
