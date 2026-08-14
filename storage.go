@@ -432,15 +432,6 @@ func (traceStore *store) notify(traceID string) {
 	traceStore.notifyMu.Unlock()
 }
 
-func (traceStore *store) snapshot(ctx context.Context, traceID string) (queryResponse, bool, error) {
-	record, found, err := traceStore.loadRecord(ctx, traceID)
-	if err != nil || !found {
-		return queryResponse{}, found, err
-	}
-	result, err := snapshotRecord(traceID, record)
-	return result, true, err
-}
-
 func (traceStore *store) loadRecord(ctx context.Context, traceID string) (*traceRecord, bool, error) {
 	record := &traceRecord{counts: make(map[spanSelector]int), spans: make(map[string]storedSpan)}
 	if err := traceStore.db.QueryRowContext(ctx, "SELECT revision FROM traces WHERE trace_id = ?", traceID).Scan(&record.revision); err != nil {

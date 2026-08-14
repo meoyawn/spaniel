@@ -9,8 +9,8 @@ captured during deterministic end-to-end tests.
 Spaniel accepts OTLP/HTTP trace exports, writes spans to SQLite through one Go
 channel, and serves concurrent reads plus event-driven blocking queries. It
 does not poll: committed ingestion rotates a per-trace notification channel,
-waking only queries for the changed trace. WAL mode permits trace CLI reads
-while the receiver writes.
+waking only queries for the changed trace. WAL mode permits HTTP reads while
+the receiver writes.
 
 ## Query semantics
 
@@ -82,24 +82,27 @@ so earlier development diagnostics remain intact without affecting a suite.
 | `POST` | `/v1/traces` | Receive OTLP/HTTP JSON or protobuf traces. |
 | `POST` | `/v1/metrics` | Accept and discard OTLP/HTTP metrics. |
 | `POST` | `/api/v1/traces/query` | Block until selectors and graph validation succeed. |
-| `GET` | `/api/v1/traces/{traceId}` | Return the current trace snapshot without waiting. |
+| `GET` | `/api/v1/traces/{traceId}` | Return GCX JSON, or Jaeger JSON with `?format=jaeger`. |
 | `GET` | `/api/v1/diagnostics` | Return accumulated validation diagnostics. |
 | `GET` | `/healthz` | Report process readiness. |
 
-## Trace CLI
+## Pull a trace
 
-`spaniel` reads SQLite directly while `spaniel-server` runs. `gcx` returns the
-raw Tempo-compatible OpenTelemetry envelope with `batches`; `jaeger` returns
-the legacy query envelope for consumers expecting that schema.
+Fetch a stored trace by ID from the running server. The default response is the
+raw Tempo-compatible OpenTelemetry envelope with `batches`:
 
 ```sh
-go run ./cmd/spaniel 0123456789abcdef0123456789abcdef
+curl http://127.0.0.1:4318/api/v1/traces/0123456789abcdef0123456789abcdef
 ```
 
-GCX JSON is the default output. Use `-format jaeger` only when a consumer needs
-the legacy Jaeger query envelope. Both commands default to the same SQLite file,
-`/tmp/spaniel/spaniel.sqlite`. Set `SPANIEL_DATABASE_PATH` or use `-db` for an
-explicit database path.
+Request the legacy Jaeger query envelope only when a consumer needs that schema:
+
+```sh
+curl 'http://127.0.0.1:4318/api/v1/traces/0123456789abcdef0123456789abcdef?format=jaeger'
+```
+
+The endpoint returns the current trace immediately without waiting for more
+spans. A malformed trace ID returns `400`; an unknown trace returns `404`.
 
 ## Install
 
@@ -107,13 +110,12 @@ Spaniel requires Go 1.26 or newer.
 
 ```sh
 go install github.com/meoyawn/spaniel/cmd/spaniel@latest
-go install github.com/meoyawn/spaniel/cmd/spaniel-server@latest
 ```
 
 ## Run
 
 ```sh
-spaniel-server -addr 127.0.0.1:4318
+spaniel -addr 127.0.0.1:4318
 ```
 
 Point an OTLP/HTTP exporter at `http://127.0.0.1:4318`. Spaniel accepts JSON

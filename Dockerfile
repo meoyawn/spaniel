@@ -1,4 +1,4 @@
 FROM scratch
 
-COPY dist/spaniel-server /spaniel-server
-ENTRYPOINT ["/spaniel-server"]
+COPY dist/spaniel /spaniel
+ENTRYPOINT ["/spaniel"]

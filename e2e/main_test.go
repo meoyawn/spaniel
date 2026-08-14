@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -31,13 +30,21 @@ func TestMain(main *testing.M) {
 	goleak.VerifyTestMain(main)
 }
 
-func TestSQLiteServerAndTraceCLI(t *testing.T) {
+func TestSQLiteServerHTTP(t *testing.T) {
 	t.Parallel()
 	databasePath := filepath.Join(t.TempDir(), "spaniel.sqlite")
 	server, origin := startServer(t, databasePath)
 	ingestTrace(t, origin)
 
-	gcx := runTraceCLI(t, databasePath, "gcx")
+	response := get(t, origin+"/api/v1/traces/"+testTraceID)
+	gcx, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET trace status = %d: %s", response.StatusCode, gcx)
+	}
 	var gcxTrace struct {
 		Batches []struct {
 			ScopeSpans []struct {
@@ -48,13 +55,24 @@ func TestSQLiteServerAndTraceCLI(t *testing.T) {
 		} `json:"batches"`
 	}
 	decodeJSON(t, gcx, &gcxTrace)
-	if len(gcxTrace.Batches) != 1 || len(gcxTrace.Batches[0].ScopeSpans) != 1 ||
-		len(gcxTrace.Batches[0].ScopeSpans[0].Spans) != 1 ||
-		gcxTrace.Batches[0].ScopeSpans[0].Spans[0].TraceID != testTraceID {
+	if len(gcxTrace.Batches) != 2 {
 		t.Fatalf("gcx trace = %s", gcx)
 	}
+	for _, batch := range gcxTrace.Batches {
+		if len(batch.ScopeSpans) != 1 || len(batch.ScopeSpans[0].Spans) != 1 || batch.ScopeSpans[0].Spans[0].TraceID != testTraceID {
+			t.Fatalf("gcx trace = %s", gcx)
+		}
+	}
 
-	jaeger := runTraceCLI(t, databasePath, "jaeger")
+	response = get(t, origin+"/api/v1/traces/"+testTraceID+"?format=jaeger")
+	jaeger, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET Jaeger trace status = %d: %s", response.StatusCode, jaeger)
+	}
 	var jaegerTrace struct {
 		Data []struct {
 			TraceID   string         `json:"traceID"`
@@ -64,45 +82,25 @@ func TestSQLiteServerAndTraceCLI(t *testing.T) {
 	}
 	decodeJSON(t, jaeger, &jaegerTrace)
 	if len(jaegerTrace.Data) != 1 || jaegerTrace.Data[0].TraceID != testTraceID ||
-		len(jaegerTrace.Data[0].Spans) != 1 || len(jaegerTrace.Data[0].Processes) != 1 {
+		len(jaegerTrace.Data[0].Spans) != 2 || len(jaegerTrace.Data[0].Processes) != 1 {
 		t.Fatalf("jaeger trace = %s", jaeger)
 	}
 
 	shutdownServer(t, server)
 	_, restartedOrigin := startServer(t, databasePath)
-	response := get(t, restartedOrigin+"/api/v1/traces/"+testTraceID)
+	response = get(t, restartedOrigin+"/api/v1/traces/"+testTraceID)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
 		t.Fatalf("persisted trace status = %d: %s", response.StatusCode, body)
 	}
-
-	const readers = 8
-	results := make(chan error, readers)
-	for range readers {
-		go func() {
-			command := exec.CommandContext(t.Context(), "go", "run", "./cmd/spaniel", "-db", databasePath, "-format", "gcx", testTraceID)
-			command.Dir = ".."
-			output, err := command.CombinedOutput()
-			if err != nil {
-				results <- fmt.Errorf("concurrent trace read: %w: %s", err, output)
-				return
-			}
-			results <- nil
-		}()
-	}
-	for range readers {
-		if err := <-results; err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
-func TestCommandsShareDefaultSQLitePathAndGCXFormat(t *testing.T) {
+func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 	temporaryDirectory := t.TempDir()
 	databasePath := filepath.Join(temporaryDirectory, "spaniel.sqlite")
-	serverBinary := filepath.Join(temporaryDirectory, "spaniel-server")
-	buildServer := exec.CommandContext(t.Context(), "go", "build", "-o", serverBinary, "./cmd/spaniel-server")
+	serverBinary := filepath.Join(temporaryDirectory, "spaniel")
+	buildServer := exec.CommandContext(t.Context(), "go", "build", "-o", serverBinary, "./cmd/spaniel")
 	buildServer.Dir = ".."
 	if output, err := buildServer.CombinedOutput(); err != nil {
 		t.Fatalf("build Spaniel server CLI: %v: %s", err, output)
@@ -148,12 +146,14 @@ func TestCommandsShareDefaultSQLitePathAndGCXFormat(t *testing.T) {
 	}
 	ingestTrace(t, origin)
 
-	command := exec.CommandContext(t.Context(), "go", "run", "./cmd/spaniel", testTraceID)
-	command.Dir = ".."
-	command.Env = append(os.Environ(), "SPANIEL_DATABASE_PATH="+databasePath)
-	output, err := command.CombinedOutput()
+	response := get(t, origin+"/api/v1/traces/"+testTraceID)
+	output, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
 	if err != nil {
-		t.Fatalf("run default trace CLI: %v: %s", err, output)
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET trace status = %d: %s", response.StatusCode, output)
 	}
 	var trace struct {
 		Batches []struct {
@@ -165,7 +165,7 @@ func TestCommandsShareDefaultSQLitePathAndGCXFormat(t *testing.T) {
 		} `json:"batches"`
 	}
 	decodeJSON(t, output, &trace)
-	if len(trace.Batches) != 1 || len(trace.Batches[0].ScopeSpans) != 1 ||
+	if len(trace.Batches) != 2 || len(trace.Batches[0].ScopeSpans) != 1 ||
 		len(trace.Batches[0].ScopeSpans[0].Spans) != 1 ||
 		trace.Batches[0].ScopeSpans[0].Spans[0].TraceID != testTraceID {
 		t.Fatalf("default GCX trace = %s", output)
@@ -214,6 +214,13 @@ func ingestTrace(t *testing.T, origin string) {
 	span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 0)))
 	span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_001, 0)))
 	span.Attributes().PutStr("e2e.proof", "sqlite")
+	secondSpan := scope.Spans().AppendEmpty()
+	secondSpan.SetTraceID(traceID(t, testTraceID))
+	secondSpan.SetSpanID(spanID(t, "fedcba9876543210"))
+	secondSpan.SetParentSpanID(spanID(t, testSpanID))
+	secondSpan.SetName("persisted child span")
+	secondSpan.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 500_000_000)))
+	secondSpan.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_001, 0)))
 	payload, err := ptraceotlp.NewExportRequestFromTraces(traces).MarshalProto()
 	if err != nil {
 		t.Fatal(err)
@@ -232,17 +239,6 @@ func ingestTrace(t *testing.T, origin string) {
 		body, _ := io.ReadAll(response.Body)
 		t.Fatalf("ingest status = %d: %s", response.StatusCode, body)
 	}
-}
-
-func runTraceCLI(t *testing.T, databasePath string, format string) []byte {
-	t.Helper()
-	command := exec.CommandContext(t.Context(), "go", "run", "./cmd/spaniel", "-db", databasePath, "-format", format, testTraceID)
-	command.Dir = ".."
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("run trace CLI: %v: %s", err, output)
-	}
-	return output
 }
 
 func get(t *testing.T, rawURL string) *http.Response {

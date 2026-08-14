@@ -266,22 +266,40 @@ func (handler *serverHandler) query(response http.ResponseWriter, request *http.
 }
 
 func (handler *serverHandler) snapshot(response http.ResponseWriter, request *http.Request) {
+	formatValue := request.URL.Query().Get("format")
+	if formatValue == "" {
+		formatValue = outputFormatGCXValue
+	}
+	format, err := NewOutputFormatFromValue(formatValue)
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
 	traceID, err := canonicalTraceID(request.PathValue("traceId"))
 	if err != nil {
 		handler.store.addDiagnostic(Diagnostic{Kind: "malformed_trace_id", Message: err.Error()})
 		http.Error(response, err.Error(), http.StatusBadRequest)
 		return
 	}
-	result, found, err := handler.store.snapshot(request.Context(), traceID)
+	record, found, err := handler.store.loadRecord(request.Context(), traceID)
 	if err != nil {
-		http.Error(response, err.Error(), http.StatusInternalServerError)
+		http.Error(response, "read trace "+traceID+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !found {
 		http.Error(response, "trace not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	encoded, err := marshalTraceJSON(traceID, format, record)
+	if err != nil {
+		http.Error(response, "render "+format.String()+" trace "+traceID+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusOK)
+	// The payload comes from encoding stored OTLP data as JSON, not from raw request input.
+	//nolint:gosec // The HTTP contract requires writing the encoded JSON unchanged.
+	_, _ = response.Write(append(encoded, '\n'))
 }
 
 func (handler *serverHandler) getDiagnostics(response http.ResponseWriter, request *http.Request) {

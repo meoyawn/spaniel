@@ -2,7 +2,6 @@
 package spaniel
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -17,7 +16,7 @@ const (
 	outputFormatJaegerValue = "jaeger"
 )
 
-// OutputFormat selects the JSON representation emitted by ReadTraceJSON.
+// OutputFormat selects the JSON representation returned by a trace lookup.
 type OutputFormat struct {
 	value string
 }
@@ -48,27 +47,7 @@ func (format OutputFormat) String() string {
 	return format.value
 }
 
-// ReadTraceJSON reads a stored trace and renders it in the requested format.
-func ReadTraceJSON(ctx context.Context, databasePath string, format OutputFormat, traceIDValue string) ([]byte, error) {
-	if databasePath == "" {
-		databasePath = DefaultDatabasePath()
-	}
-	traceID, err := canonicalTraceID(traceIDValue)
-	if err != nil {
-		return nil, err
-	}
-	traceStore, err := newStore(databasePath)
-	if err != nil {
-		return nil, fmt.Errorf("open Spaniel database %q: %w", databasePath, err)
-	}
-	defer traceStore.close()
-	record, found, err := traceStore.loadRecord(ctx, traceID)
-	if err != nil {
-		return nil, fmt.Errorf("read trace %s: %w", traceID, err)
-	}
-	if !found {
-		return nil, fmt.Errorf("trace %s not found", traceID)
-	}
+func marshalTraceJSON(traceID string, format OutputFormat, record *traceRecord) ([]byte, error) {
 	switch format.value {
 	case outputFormatGCXValue:
 		return marshalGCXTrace(traceID, record)

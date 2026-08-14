@@ -18,14 +18,14 @@ tasks:
     env:
       CGO_ENABLED: 0
       GOOS: linux
-    cmd: go build -trimpath -buildvcs=false -o dist/spaniel-server ./cmd/spaniel-server
+    cmd: go build -trimpath -buildvcs=false -o dist/spaniel ./cmd/spaniel
     sources:
       - ./*.go
       - ./**/*.go
       - go.mod
       - go.sum
     generates:
-      - dist/spaniel-server
+      - dist/spaniel
 
   test:
     run: once

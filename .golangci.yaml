@@ -71,7 +71,7 @@ linters:
         linters:
           - errcheck
         text: response\.Body\.Close
-      - path: ^cmd/spaniel-server/main\.go$
+      - path: ^cmd/spaniel/main\.go$
         linters:
           - errcheck
         text: response\.Body\.Close
@@ -121,7 +121,7 @@ linters:
       - path: ^e2e/main_test\.go$
         linters:
           - paralleltest
-        text: TestCommandsShareDefaultSQLitePathAndGCXFormat
+        text: TestCommandUsesDefaultSQLitePathAndGCXFormat
       - path: ^main_test\.go$
         linters:
           - paralleltest
@@ -133,10 +133,6 @@ linters:
         linters:
           - wrapcheck
         text: error returned from (external package is unwrapped|interface method should be wrapped)
-      - path: ^cmd/spaniel/main\.go$
-        linters:
-          - wrapcheck
-        text: error returned from external package is unwrapped
       # These test-only helper parameters are fixed by the fixture contract.
       - path: ^main_test\.go$
         linters:
