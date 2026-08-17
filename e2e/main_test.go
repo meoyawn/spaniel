@@ -9,8 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +27,7 @@ const (
 )
 
 func TestMain(main *testing.M) {
+	runSupervisorIfRequested()
 	goleak.VerifyTestMain(main)
 }
 
@@ -99,12 +100,6 @@ func TestSQLiteServerHTTP(t *testing.T) {
 func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 	temporaryDirectory := t.TempDir()
 	databasePath := filepath.Join(temporaryDirectory, "spaniel.sqlite")
-	serverBinary := filepath.Join(temporaryDirectory, "spaniel")
-	buildServer := exec.CommandContext(t.Context(), "go", "build", "-o", serverBinary, "./cmd/spaniel")
-	buildServer.Dir = ".."
-	if output, err := buildServer.CombinedOutput(); err != nil {
-		t.Fatalf("build Spaniel server CLI: %v: %s", err, output)
-	}
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -114,19 +109,21 @@ func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := exec.CommandContext(t.Context(), serverBinary, "-addr", address)
-	server.Env = append(os.Environ(), "SPANIEL_DATABASE_PATH="+databasePath)
 	serverOutput := &bytes.Buffer{}
-	server.Stdout = serverOutput
-	server.Stderr = serverOutput
-	if err := server.Start(); err != nil {
+	server, err := startSupervisor(t.Context(), []supervisedCommand{{
+		Args: []string{"go", "run", "./cmd/spaniel", "-addr", address},
+		Dir:  "..",
+		Env:  append(os.Environ(), "SPANIEL_DATABASE_PATH="+databasePath),
+	}}, supervisorOptions{Stderr: serverOutput, Stdout: serverOutput})
+	if err != nil {
 		t.Fatalf("start Spaniel server CLI: %v", err)
 	}
 	t.Cleanup(func() {
-		if server.Process != nil {
-			_ = server.Process.Signal(os.Interrupt)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.shutdown(shutdownCtx, syscall.SIGTERM); err != nil {
+			t.Errorf("stop Spaniel server CLI: %v", err)
 		}
-		_ = server.Wait()
 	})
 
 	origin := "http://" + address
