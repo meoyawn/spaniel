@@ -32,6 +32,7 @@ linters:
     # Subjective or project-policy checks not adopted by Spaniel.
     - depguard
     - exhaustruct
+    - exhaustruct_v5
     - forbidigo
     - funlen
     - gochecknoglobals
