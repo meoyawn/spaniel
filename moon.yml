@@ -1,0 +1,58 @@
+toolchains:
+  default: system
+tasks:
+  mod-download:
+    inputs:
+      - go.mod
+      - go.sum
+    script: |-
+      set -euo pipefail
+      go mod download
+    options:
+      cache: true
+  test:
+    deps:
+      - spaniel:mod-download
+    inputs:
+      - ./*.go
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    script: |-
+      set -euo pipefail
+      go test . ./cmd/...
+    options:
+      cache: true
+  test-e2e:
+    deps:
+      - spaniel:mod-download
+    inputs:
+      - ./*.go
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    script: |-
+      set -euo pipefail
+      go test -count=1 ./e2e
+    options:
+      cache: true
+  lint:
+    deps:
+      - spaniel:mod-download
+    inputs:
+      - ./*.go
+      - ./**/*.go
+      - go.mod
+      - go.sum
+      - .golangci.yaml
+    script: |-
+      set -euo pipefail
+      gofmt -w .
+      go tool golangci-lint run ./...
+    options:
+      cache: true
+  check:
+    deps:
+      - spaniel:lint
+      - spaniel:test
+      - spaniel:test-e2e

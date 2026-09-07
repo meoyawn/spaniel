@@ -3,4 +3,16 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
 .task/
+.cache/
+dist/
+build/
+coverage/
+.test-results/
+test-results/
+*.test
+*.prof
+*.pprof
+dump-*.json
+**/.moon/cache/

@@ -126,7 +126,7 @@ and protobuf trace payloads.
 Run the complete check from the repository root:
 
 ```sh
-task check
+pkgx moon run check
 ```
 
 `NewServer` accepts an explicit SQLite path and a test-specific body size limit.
