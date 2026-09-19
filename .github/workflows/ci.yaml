@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - master
   pull_request:
 
 permissions:
@@ -9,16 +11,51 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Check formatting
-        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test -count=1 ./...
+          cache: false
+      - name: Restore Go modules, compiler, and linter caches
+        id: go-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            .cache/golangci-lint
+          key: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
+      - uses: pkgxdev/setup@v5
+      - name: Identify the CI toolchain
+        id: toolchain
+        run: |
+          mkdir -p "$HOME/.cache/go-build"
+          fingerprint="$(
+            {
+              go version
+              pkgx moon --version
+            } | sha256sum
+          )"
+          fingerprint="${fingerprint%% *}"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "CI_TOOLCHAIN=$fingerprint" >> "$GITHUB_ENV"
+      - name: Restore Moon task results and outputs
+        id: moon-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            .moon/cache/hashes
+            .moon/cache/outputs
+          key: moon-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.fingerprint }}-${{ github.sha }}
+          restore-keys: |
+            moon-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.fingerprint }}-
+      - name: Check
+        run: pkgx moon run check

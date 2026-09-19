@@ -1,0 +1,13 @@
+defaultProject: spaniel
+projects:
+  spaniel: .
+versionConstraint: ">=2.5.4 <3.0.0"
+vcs:
+  client: git
+  defaultBranch: master
+pipeline:
+  installDependencies: false
+  syncProjects: false
+  syncWorkspace: false
+hasher:
+  walkStrategy: glob

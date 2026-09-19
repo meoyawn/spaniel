@@ -1,0 +1,65 @@
+toolchains:
+  default: system
+tasks:
+  mod-download:
+    inputs:
+      - go.mod
+      - go.sum
+    script: |-
+      set -euo pipefail
+      go mod download
+    options:
+      cache: true
+  test:
+    deps:
+      - spaniel:mod-download
+    inputs:
+      - ./*.go
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    script: |-
+      set -euo pipefail
+      go test -count=1 . ./cmd/...
+    options:
+      cache: true
+  test-e2e:
+    deps:
+      - spaniel:mod-download
+    inputs:
+      - ./*.go
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    script: |-
+      set -euo pipefail
+      go test -count=1 ./e2e
+    options:
+      cache: true
+  lint:
+    deps:
+      - spaniel:mod-download
+    inputs:
+      - ./*.go
+      - ./**/*.go
+      - go.mod
+      - go.sum
+      - .golangci.yaml
+    script: |-
+      set -euo pipefail
+      if [[ "${CI:-}" == "true" ]]; then
+        test -z "$(gofmt -l .)"
+      else
+        gofmt -w .
+      fi
+      go vet ./...
+      mkdir -p .cache/golangci-lint-tmp
+      GOLANGCI_LINT_CACHE="${GOLANGCI_LINT_CACHE:-$PWD/.cache/golangci-lint}" \
+        TMPDIR="$PWD/.cache/golangci-lint-tmp" go tool golangci-lint run ./...
+    options:
+      cache: true
+  check:
+    deps:
+      - spaniel:lint
+      - spaniel:test
+      - spaniel:test-e2e

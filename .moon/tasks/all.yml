@@ -1,0 +1,12 @@
+env:
+  GOCACHE: ${HOME}/.cache/go-build
+  GOTMPDIR: ${HOME}/.cache/go-build
+taskOptions:
+  cache: false
+  unixShell: bash
+  outputStyle: stream
+implicitInputs:
+  - $CI
+  - $CI_TOOLCHAIN
+  - /.moon/**/*.yml
+  - moon.yml
