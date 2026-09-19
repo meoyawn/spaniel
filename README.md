@@ -129,6 +129,13 @@ Run the complete check from the repository root:
 pkgx moon run check
 ```
 
+CI runs the same lint, unit-test, and E2E tasks with formatting verification and
+Go vet. It restores Go modules, compiler output, and golangci-lint data, saving an
+updated cache for each commit. Moon restores only its portable `hashes` and
+`outputs` directories, keyed by runner architecture and the resolved toolchain.
+Moon hashes Go sources, module files, configuration, and CI environment inputs
+before reusing a result. Tests execute whenever Moon selects their task.
+
 `NewServer` accepts an explicit SQLite path and a test-specific body size limit.
 An empty path selects the shared temporary default; a zero body-size value
 selects the bounded default.

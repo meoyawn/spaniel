@@ -5,3 +5,8 @@ taskOptions:
   cache: false
   unixShell: bash
   outputStyle: stream
+implicitInputs:
+  - $CI
+  - $CI_TOOLCHAIN
+  - /.moon/**/*.yml
+  - moon.yml
