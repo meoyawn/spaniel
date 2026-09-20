@@ -126,15 +126,19 @@ and protobuf trace payloads.
 Run the complete check from the repository root:
 
 ```sh
-pkgx moon run check
+moon run check
 ```
 
-CI runs the same lint, unit-test, and E2E tasks with formatting verification and
-Go vet. It restores Go modules, compiler output, and golangci-lint data, saving an
-updated cache for each commit. Moon restores only its portable `hashes` and
-`outputs` directories, keyed by runner architecture and the resolved toolchain.
-Moon hashes Go sources, module files, configuration, and CI environment inputs
-before reusing a result. Tests execute whenever Moon selects their task.
+CI follows [Moon's CI guide](https://moonrepo.dev/docs/guides/ci): full Git
+history, source-based affected selection, and plain `moon ci`. It runs the same
+project tasks used locally; aggregate checks and maintenance commands are excluded
+from automatic selection. The same `moon.yml` also works as a Listenbox submodule.
+
+Go modules, compiler output, and golangci-lint data are cached. Moon task results
+are not restored across CI runs. Sources, module files, fixtures, templates, and
+configuration determine affected tasks; `$CI` is not an input. CI verifies
+formatting, and selected Go tests bypass Go's test-result cache. Native Moon
+reports are attached to the workflow, including on failure.
 
 `NewServer` accepts an explicit SQLite path and a test-specific body size limit.
 An empty path selects the shared temporary default; a zero body-size value
