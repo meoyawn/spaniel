@@ -1,5 +1,10 @@
 toolchains:
   default: system
+fileGroups:
+  sources:
+    - go.mod
+    - go.sum
+    - ./**/*.go
 tasks:
   mod-download:
     inputs:
@@ -12,7 +17,7 @@ tasks:
       cache: true
   test:
     deps:
-      - spaniel:mod-download
+      - ~:mod-download
     inputs:
       - ./*.go
       - ./**/*.go
@@ -25,7 +30,7 @@ tasks:
       cache: true
   test-e2e:
     deps:
-      - spaniel:mod-download
+      - ~:mod-download
     inputs:
       - ./*.go
       - ./**/*.go
@@ -38,7 +43,7 @@ tasks:
       cache: true
   lint:
     deps:
-      - spaniel:mod-download
+      - ~:mod-download
     inputs:
       - ./*.go
       - ./**/*.go
@@ -60,6 +65,9 @@ tasks:
       cache: true
   check:
     deps:
-      - spaniel:lint
-      - spaniel:test
-      - spaniel:test-e2e
+      - ~:lint
+      - ~:test
+      - ~:test-e2e
+    inputs: []
+    options:
+      runInCI: false
