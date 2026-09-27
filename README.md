@@ -134,7 +134,12 @@ history, source-based affected selection, and plain `moon ci`. It runs the same
 project tasks used locally; aggregate checks and maintenance commands are excluded
 from automatic selection. The same `moon.yml` also works as a Listenbox submodule.
 
-Go modules, compiler output, and golangci-lint data are cached. Moon task results
+Go modules and compiler output use Go's user-level caches (`go env GOMODCACHE
+GOCACHE`), shared with direct Go commands and other worktrees. Moon uses
+`~/.cache/golangci-lint` for linter data; temporary files use the system temp
+directory. The same cache locations apply in standalone and parent workspaces.
+The lint task allows parallel runners without the global linter lock.
+Moon task results
 are not restored across CI runs. Sources, module files, fixtures, templates, and
 configuration determine affected tasks; `$CI` is not an input. CI verifies
 formatting, and selected Go tests bypass Go's test-result cache. Native Moon

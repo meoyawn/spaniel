@@ -58,9 +58,7 @@ tasks:
         gofmt -w .
       fi
       go vet ./...
-      mkdir -p .cache/golangci-lint-tmp
-      GOLANGCI_LINT_CACHE="${GOLANGCI_LINT_CACHE:-$PWD/.cache/golangci-lint}" \
-        TMPDIR="$PWD/.cache/golangci-lint-tmp" go tool golangci-lint run ./...
+      go tool golangci-lint run --allow-parallel-runners ./...
     options:
       cache: true
   check:

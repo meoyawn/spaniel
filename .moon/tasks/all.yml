@@ -1,6 +1,5 @@
 env:
-  GOCACHE: ${HOME}/.cache/go-build
-  GOTMPDIR: ${HOME}/.cache/go-build
+  GOLANGCI_LINT_CACHE: ${HOME}/.cache/golangci-lint
 taskOptions:
   cache: false
   unixShell: bash

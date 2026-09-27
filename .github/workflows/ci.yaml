@@ -29,15 +29,14 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-            .cache/golangci-lint
-          key: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+            ~/.cache/golangci-lint
+          key: go-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
-            go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-
-            go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
+            go-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
       - uses: moonrepo/setup-toolchain@v0
         with:
           moon-version: "2.5.5"
-      - run: mkdir -p "$HOME/.cache/go-build"
       - name: Check affected tasks
         id: ci
         run: moon ci
