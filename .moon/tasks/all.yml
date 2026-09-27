@@ -1,4 +1,5 @@
 env:
+  GOCACHE: ${HOME}/.cache/go-build
   GOLANGCI_LINT_CACHE: ${HOME}/.cache/golangci-lint
 taskOptions:
   cache: false
