@@ -34,10 +34,11 @@ func TestMain(main *testing.M) {
 func TestSQLiteServerHTTP(t *testing.T) {
 	t.Parallel()
 	databasePath := filepath.Join(t.TempDir(), "spaniel.sqlite")
-	server, origin := startServer(t, databasePath)
-	ingestTrace(t, origin)
+	client := newClient(t)
+	server, origin := startServer(t, client, databasePath)
+	ingestTrace(t, client, origin)
 
-	response := get(t, origin+"/api/v1/traces/"+testTraceID)
+	response := get(t, client, origin+"/api/v1/traces/"+testTraceID)
 	gcx, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {
@@ -65,7 +66,7 @@ func TestSQLiteServerHTTP(t *testing.T) {
 		}
 	}
 
-	response = get(t, origin+"/api/v1/traces/"+testTraceID+"?format=jaeger")
+	response = get(t, client, origin+"/api/v1/traces/"+testTraceID+"?format=jaeger")
 	jaeger, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {
@@ -87,9 +88,9 @@ func TestSQLiteServerHTTP(t *testing.T) {
 		t.Fatalf("jaeger trace = %s", jaeger)
 	}
 
-	shutdownServer(t, server)
-	_, restartedOrigin := startServer(t, databasePath)
-	response = get(t, restartedOrigin+"/api/v1/traces/"+testTraceID)
+	shutdownServer(t, client, server)
+	_, restartedOrigin := startServer(t, client, databasePath)
+	response = get(t, client, restartedOrigin+"/api/v1/traces/"+testTraceID)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(response.Body)
@@ -98,6 +99,7 @@ func TestSQLiteServerHTTP(t *testing.T) {
 }
 
 func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
+	t.Parallel()
 	temporaryDirectory := t.TempDir()
 	databasePath := filepath.Join(temporaryDirectory, "spaniel.sqlite")
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -126,10 +128,11 @@ func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 		}
 	})
 
+	client := newClient(t)
 	origin := "http://" + address
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		response, requestErr := newClient().Get(origin + "/healthz")
+		response, requestErr := client.Get(origin + "/healthz")
 		if requestErr == nil {
 			_ = response.Body.Close()
 			if response.StatusCode == http.StatusOK {
@@ -141,9 +144,9 @@ func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	ingestTrace(t, origin)
+	ingestTrace(t, client, origin)
 
-	response := get(t, origin+"/api/v1/traces/"+testTraceID)
+	response := get(t, client, origin+"/api/v1/traces/"+testTraceID)
 	output, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {
@@ -169,7 +172,7 @@ func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 	}
 }
 
-func startServer(t *testing.T, databasePath string) (*http.Server, string) {
+func startServer(t *testing.T, client *http.Client, databasePath string) (*http.Server, string) {
 	t.Helper()
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -182,14 +185,18 @@ func startServer(t *testing.T, databasePath string) (*http.Server, string) {
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	t.Cleanup(func() {
+		client.CloseIdleConnections()
 		_ = server.Shutdown(context.Background())
 		<-done
 	})
 	return server, "http://" + listener.Addr().String()
 }
 
-func shutdownServer(t *testing.T, server *http.Server) {
+func shutdownServer(t *testing.T, client *http.Client, server *http.Server) {
 	t.Helper()
+	// An unused pooled dial is StateNew on the server. Close the test-owned pool
+	// before shutdown instead of waiting for its first-request timeout.
+	client.CloseIdleConnections()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
@@ -197,7 +204,7 @@ func shutdownServer(t *testing.T, server *http.Server) {
 	}
 }
 
-func ingestTrace(t *testing.T, origin string) {
+func ingestTrace(t *testing.T, client *http.Client, origin string) {
 	t.Helper()
 	traces := ptrace.NewTraces()
 	resource := traces.ResourceSpans().AppendEmpty()
@@ -227,7 +234,7 @@ func ingestTrace(t *testing.T, origin string) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Content-Type", "application/x-protobuf")
-	response, err := newClient().Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,21 +245,28 @@ func ingestTrace(t *testing.T, origin string) {
 	}
 }
 
-func get(t *testing.T, rawURL string) *http.Response {
+func get(t *testing.T, client *http.Client, rawURL string) *http.Response {
 	t.Helper()
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, rawURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := newClient().Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return response
 }
 
-func newClient() *http.Client {
-	return &http.Client{Timeout: time.Second}
+func newClient(t *testing.T) *http.Client {
+	t.Helper()
+	// Each test owns its pool, so closing unused dials cannot affect siblings.
+	client := &http.Client{
+		Transport: &http.Transport{},
+		Timeout:   time.Second,
+	}
+	t.Cleanup(client.CloseIdleConnections)
+	return client
 }
 
 func decodeJSON(t *testing.T, body []byte, destination any) {
