@@ -117,12 +117,7 @@ linters:
         linters:
           - noctx
         text: database/sql
-      # These tests intentionally run serially because they exercise shared
-      # command/default-path and graph-validation behavior.
-      - path: ^e2e/main_test\.go$
-        linters:
-          - paralleltest
-        text: TestCommandUsesDefaultSQLitePathAndGCXFormat
+      # Graph-validation subtests exercise a shared server.
       - path: ^main_test\.go$
         linters:
           - paralleltest

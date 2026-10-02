@@ -38,7 +38,7 @@ tasks:
       - go.sum
     script: |-
       set -euo pipefail
-      go test -count=1 ./e2e
+      go test -count=1 -timeout=30s ./e2e
     options:
       cache: true
   lint:
