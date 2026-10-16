@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -187,7 +188,9 @@ func startServer(t *testing.T, client *http.Client, databasePath string) (*http.
 	t.Cleanup(func() {
 		client.CloseIdleConnections()
 		_ = server.Shutdown(context.Background())
-		<-done
+		if err := <-done; !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("stop Spaniel HTTP server: %v", err)
+		}
 	})
 	return server, "http://" + listener.Addr().String()
 }
