@@ -149,7 +149,11 @@ func startSupervisor(
 		return nil, fmt.Errorf("start supervisor children: %s", started.Error)
 	}
 
-	group := &processSupervisor{command: command, done: make(chan error, 1), liveness: livenessWrite}
+	group := &processSupervisor{
+		command:  command,
+		done:     make(chan error, 1),
+		liveness: livenessWrite,
+	}
 	go func() {
 		group.done <- command.Wait()
 		close(group.done)
@@ -165,7 +169,10 @@ func (group *processSupervisor) signal(value syscall.Signal) error {
 	if group.command == nil || group.command.Process == nil {
 		return nil
 	}
-	if err := group.command.Process.Signal(value); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := group.command.Process.Signal(
+		value,
+	); err != nil &&
+		!errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("signal supervisor with %s: %w", value, err)
 	}
 	return nil
@@ -191,7 +198,9 @@ func (group *processSupervisor) shutdown(ctx context.Context, value syscall.Sign
 func runSupervisor() int {
 	var cfg supervisorConfig
 	if err := json.NewDecoder(os.Stdin).Decode(&cfg); err != nil {
-		writeSupervisorStatus(supervisorStatus{Error: fmt.Sprintf("decode supervisor config: %v", err)})
+		writeSupervisorStatus(
+			supervisorStatus{Error: fmt.Sprintf("decode supervisor config: %v", err)},
+		)
 		return 1
 	}
 	liveness := os.NewFile(livenessFD, "supervisor-liveness")
@@ -201,7 +210,8 @@ func runSupervisor() int {
 	}
 	children, err := startSupervisorChildren(cfg.Commands)
 	if err != nil {
-		if statusErr := json.NewEncoder(statusFile).Encode(supervisorStatus{Error: err.Error()}); statusErr != nil {
+		if statusErr := json.NewEncoder(statusFile).
+			Encode(supervisorStatus{Error: err.Error()}); statusErr != nil {
 			fmt.Fprintf(os.Stderr, "encode supervisor startup error: %v\n", statusErr)
 		}
 		_ = statusFile.Close()
@@ -227,7 +237,8 @@ func runSupervisor() int {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	if err := json.NewEncoder(statusFile).Encode(supervisorStatus{PIDs: supervisorChildPIDs(children)}); err != nil {
+	if err := json.NewEncoder(statusFile).
+		Encode(supervisorStatus{PIDs: supervisorChildPIDs(children)}); err != nil {
 		fmt.Fprintf(os.Stderr, "encode supervisor startup status: %v\n", err)
 		signalSupervisorChildren(children, syscall.SIGKILL)
 		return 1
@@ -305,7 +316,13 @@ func signalSupervisorChildren(children []*exec.Cmd, value syscall.Signal) {
 		}
 		err := syscall.Kill(-child.Process.Pid, value)
 		if err != nil && !errors.Is(err, syscall.ESRCH) {
-			fmt.Fprintf(os.Stderr, "signal process group %d with %s: %v\n", child.Process.Pid, value, err)
+			fmt.Fprintf(
+				os.Stderr,
+				"signal process group %d with %s: %v\n",
+				child.Process.Pid,
+				value,
+				err,
+			)
 		}
 	}
 }

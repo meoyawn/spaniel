@@ -1,0 +1,63 @@
+inheritedBy:
+  tags: [go-lint]
+tasks:
+  lint:
+    description: Format and lint Go with the shared policy and this checkout's Git exclusions.
+    command: [mise, exec, --, node, --input-type=module, -e]
+    args:
+      - |
+        import {execFileSync} from "node:child_process";
+        import {randomUUID} from "node:crypto";
+        import {existsSync,mkdirSync,readFileSync,renameSync,rmSync,writeFileSync} from "node:fs";
+        import {dirname,join} from "node:path";
+        let directory=process.cwd();
+        while(!existsSync(join(directory,".golangci.yaml"))){
+          const parent=dirname(directory);
+          if(parent===directory)throw Error("No shared .golangci.yaml found");
+          directory=parent;
+        }
+        const source=join(directory,".golangci.yaml");
+        const ignored=execFileSync("git",["ls-files","-z","--others","--ignored","--exclude-standard","--directory","--","."],{encoding:"utf8",maxBuffer:8*1024*1024});
+        const patterns=ignored.split("\0").filter(path=>path.endsWith("/")||path.endsWith(".go")).map(path=>"^"+path.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+(path.endsWith("/")?"":"$"));
+        const base=readFileSync(source,"utf8");
+        const marker=/^([ \t]*)# moon:gitignored-files$/gm;
+        if([...base.matchAll(marker)].length!==2)throw Error("The shared Go policy must have Git exclusion markers for linters and formatters");
+        const policy=base.replace(marker,(_,indent)=>patterns.length?patterns.map(pattern=>indent+"- "+JSON.stringify(pattern)).join("\n"):indent+"# No Git-ignored paths in this module.");
+        const files=execFileSync("git",["ls-files","-z","--cached","--others","--exclude-standard","--","."],{encoding:"utf8",maxBuffer:8*1024*1024}).split("\0");
+        const packages=new Set();
+        for(const file of files){
+          if(!file.endsWith(".go"))continue;
+          const parts=file.split("/");
+          if(parts.some(part=>part==="testdata"||part==="vendor"||part.startsWith(".")||part.startsWith("_")))continue;
+          let parent=dirname(join(process.cwd(),file));
+          let nested=false;
+          while(parent!==process.cwd()){
+            if(existsSync(join(parent,"go.mod"))){nested=true;break;}
+            const above=dirname(parent);
+            if(above===parent)throw Error("Go source escaped its module: "+file);
+            parent=above;
+          }
+          if(!nested)packages.add("./"+dirname(file).replaceAll("\\","/"));
+        }
+        if(packages.size===0)throw Error("No maintained Go packages found in this module");
+        mkdirSync(".cache",{recursive:true,mode:0o700});
+        const rendered=join(".cache","golangci-"+randomUUID()+".yaml");
+        writeFileSync(rendered+".tmp",policy,{mode:0o600});
+        renameSync(rendered+".tmp",rendered);
+        console.log("Go lint policy: "+source+"; "+patterns.length+" Git-ignored paths excluded");
+        try{
+          const format=["fmt","--config",rendered];
+          if(process.env.GO_LINT_FORMATTERS){
+            execFileSync("go",["tool","golangci-lint",...format,"--enable",process.env.GO_LINT_FORMATTERS],{stdio:"inherit"});
+          }
+          execFileSync("go",["tool","golangci-lint",...format],{stdio:"inherit"});
+          const run=["run","--config",rendered,"--allow-parallel-runners"];
+          if(process.env.GO_LINT_BUILD_TAGS)run.push("--build-tags",process.env.GO_LINT_BUILD_TAGS);
+          run.push("--output.json.path", ".cache/golangci-report.json",...packages);
+          execFileSync("go",["tool","golangci-lint",...run],{stdio:"inherit"});
+        }catch(error){process.exitCode=typeof error.status==="number"?error.status:1;}
+        finally{rmSync(rendered,{force:true});}
+    inputs: ['**/*.go', go.mod, go.sum, mise.toml, mise.lock, .golangci.yaml, .gitignore, .moon/tasks/go-lint.yml, '$GO_LINT_FORMATTERS']
+    options:
+      cache: true
+      shell: false

@@ -14,6 +14,7 @@ import (
 const (
 	outputFormatGCXValue    = "gcx"
 	outputFormatJaegerValue = "jaeger"
+	jaegerStringType        = "string"
 )
 
 // OutputFormat selects the JSON representation returned by a trace lookup.
@@ -125,15 +126,22 @@ func marshalJaegerTrace(traceID string, record *traceRecord) ([]byte, error) {
 	for _, span := range record.spans {
 		spans = append(spans, span)
 	}
-	sort.Slice(spans, func(left int, right int) bool { return spans[left].normalized.SpanID < spans[right].normalized.SpanID })
+	sort.Slice(
+		spans,
+		func(left int, right int) bool { return spans[left].normalized.SpanID < spans[right].normalized.SpanID },
+	)
 	for _, stored := range spans {
 		decoded, err := (&ptrace.JSONUnmarshaler{}).UnmarshalTraces(stored.payload)
 		if err != nil {
-			return nil, fmt.Errorf("decode trace %s span %s: %w", traceID, stored.normalized.SpanID, err)
+			return nil, fmt.Errorf(
+				"decode trace %s span %s: %w",
+				traceID,
+				stored.normalized.SpanID,
+				err,
+			)
 		}
 		resourceSpan := decoded.ResourceSpans().At(0)
 		scopeSpan := resourceSpan.ScopeSpans().At(0)
-		span := scopeSpan.Spans().At(0)
 		processKeyBytes, err := json.Marshal(resourceSpan.Resource().Attributes().AsRaw())
 		if err != nil {
 			return nil, fmt.Errorf("marshal trace %s process: %w", traceID, err)
@@ -148,47 +156,75 @@ func marshalJaegerTrace(traceID string, record *traceRecord) ([]byte, error) {
 				Tags:        jaegerTags(resourceSpan.Resource().Attributes(), "service.name"),
 			}
 		}
-		converted := jaegerSpan{
-			TraceID:       traceID,
-			SpanID:        span.SpanID().String(),
-			OperationName: span.Name(),
-			StartTime:     uint64(span.StartTimestamp()) / uint64(time.Microsecond),
-			Duration:      uint64(span.EndTimestamp()-span.StartTimestamp()) / uint64(time.Microsecond),
-			Tags:          jaegerTags(span.Attributes(), ""),
-			ProcessID:     processID,
-		}
-		if !span.ParentSpanID().IsEmpty() {
-			converted.References = append(converted.References, jaegerReference{RefType: "CHILD_OF", TraceID: traceID, SpanID: span.ParentSpanID().String()})
-		}
-		links := span.Links()
-		for index := range links.Len() {
-			link := links.At(index)
-			converted.References = append(converted.References, jaegerReference{RefType: "FOLLOWS_FROM", TraceID: link.TraceID().String(), SpanID: link.SpanID().String()})
-		}
-		converted.Tags = append(converted.Tags,
-			jaegerTag{Key: "span.kind", Type: "string", Value: span.Kind().String()},
-			jaegerTag{Key: "otel.status_code", Type: "string", Value: span.Status().Code().String()},
-		)
-		if span.Status().Message() != "" {
-			converted.Tags = append(converted.Tags, jaegerTag{Key: "otel.status_description", Type: "string", Value: span.Status().Message()})
-		}
-		if scopeSpan.Scope().Name() != "" {
-			converted.Tags = append(converted.Tags, jaegerTag{Key: "otel.scope.name", Type: "string", Value: scopeSpan.Scope().Name()})
-		}
-		if scopeSpan.Scope().Version() != "" {
-			converted.Tags = append(converted.Tags, jaegerTag{Key: "otel.scope.version", Type: "string", Value: scopeSpan.Scope().Version()})
-		}
-		events := span.Events()
-		for index := range events.Len() {
-			event := events.At(index)
-			fields := jaegerTags(event.Attributes(), "")
-			fields = append(fields, jaegerTag{Key: "event", Type: "string", Value: event.Name()})
-			converted.Logs = append(converted.Logs, jaegerLog{Timestamp: uint64(event.Timestamp()) / uint64(time.Microsecond), Fields: fields})
-		}
-		sort.Slice(converted.Tags, func(left int, right int) bool { return converted.Tags[left].Key < converted.Tags[right].Key })
-		trace.Spans = append(trace.Spans, converted)
+		trace.Spans = append(trace.Spans, convertJaegerSpan(traceID, scopeSpan, processID))
 	}
-	return json.Marshal(jaegerTraceResponse{Data: []jaegerTrace{trace}, Total: 1, Limit: 0, Offset: 0})
+
+	return json.Marshal(
+		jaegerTraceResponse{Data: []jaegerTrace{trace}, Total: 1, Limit: 0, Offset: 0},
+	)
+}
+
+func convertJaegerSpan(traceID string, scope ptrace.ScopeSpans, processID string) jaegerSpan {
+	span := scope.Spans().At(0)
+	return jaegerSpan{
+		TraceID: traceID, SpanID: span.SpanID().String(), OperationName: span.Name(),
+		StartTime: uint64(span.StartTimestamp()) / uint64(time.Microsecond),
+		Duration:  uint64(span.EndTimestamp()-span.StartTimestamp()) / uint64(time.Microsecond),
+		ProcessID: processID, Tags: jaegerSpanTags(span, scope.Scope()),
+		References: jaegerReferences(traceID, span), Logs: jaegerLogs(span.Events()),
+	}
+}
+
+func jaegerReferences(traceID string, span ptrace.Span) []jaegerReference {
+	var references []jaegerReference
+	if !span.ParentSpanID().IsEmpty() {
+		references = append(references, jaegerReference{
+			RefType: "CHILD_OF", TraceID: traceID, SpanID: span.ParentSpanID().String(),
+		})
+	}
+	links := span.Links()
+	for index := range links.Len() {
+		link := links.At(index)
+		references = append(references, jaegerReference{
+			RefType: "FOLLOWS_FROM", TraceID: link.TraceID().String(), SpanID: link.SpanID().String(),
+		})
+	}
+	return references
+}
+
+func jaegerSpanTags(span ptrace.Span, scope pcommon.InstrumentationScope) []jaegerTag {
+	tags := append(jaegerTags(span.Attributes(), ""),
+		jaegerTag{Key: "span.kind", Type: jaegerStringType, Value: span.Kind().String()},
+		jaegerTag{Key: "otel.status_code", Type: jaegerStringType, Value: span.Status().Code().String()},
+	)
+	if span.Status().Message() != "" {
+		tags = append(tags, jaegerTag{Key: "otel.status_description", Type: jaegerStringType, Value: span.Status().Message()})
+	}
+	if scope.Name() != "" {
+		tags = append(tags, jaegerTag{Key: "otel.scope.name", Type: jaegerStringType, Value: scope.Name()})
+	}
+	if scope.Version() != "" {
+		tags = append(tags, jaegerTag{Key: "otel.scope.version", Type: jaegerStringType, Value: scope.Version()})
+	}
+	sort.Slice(tags, func(left int, right int) bool { return tags[left].Key < tags[right].Key })
+	return tags
+}
+
+func jaegerLogs(events ptrace.SpanEventSlice) []jaegerLog {
+	if events.Len() == 0 {
+		return nil
+	}
+	logs := make([]jaegerLog, 0, events.Len())
+	for index := range events.Len() {
+		event := events.At(index)
+		fields := append(jaegerTags(event.Attributes(), ""),
+			jaegerTag{Key: "event", Type: jaegerStringType, Value: event.Name()},
+		)
+		logs = append(logs, jaegerLog{
+			Timestamp: uint64(event.Timestamp()) / uint64(time.Microsecond), Fields: fields,
+		})
+	}
+	return logs
 }
 
 func jaegerTags(attributes pcommon.Map, excluded string) []jaegerTag {
@@ -215,15 +251,15 @@ func jaegerValue(value pcommon.Value) (string, any) {
 	case pcommon.ValueTypeBytes:
 		return "binary", value.Bytes().AsRaw()
 	case pcommon.ValueTypeStr:
-		return "string", value.Str()
+		return jaegerStringType, value.Str()
 	case pcommon.ValueTypeMap, pcommon.ValueTypeSlice:
 		encoded, err := json.Marshal(value.AsRaw())
 		if err != nil {
-			return "string", fmt.Sprintf("<invalid JSON value: %v>", err)
+			return jaegerStringType, fmt.Sprintf("<invalid JSON value: %v>", err)
 		}
-		return "string", string(encoded)
+		return jaegerStringType, string(encoded)
 	case pcommon.ValueTypeEmpty:
-		return "string", ""
+		return jaegerStringType, ""
 	}
-	return "string", fmt.Sprint(value.AsRaw())
+	return jaegerStringType, fmt.Sprint(value.AsRaw())
 }

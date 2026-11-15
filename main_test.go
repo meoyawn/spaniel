@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -20,7 +21,12 @@ import (
 	"go.uber.org/goleak"
 )
 
-const testTraceID = "0123456789abcdef0123456789abcdef"
+const (
+	testTraceID       = "0123456789abcdef0123456789abcdef"
+	testWorkerService = "worker"
+	testAPIService    = "api"
+	testRequestSpan   = "request"
+)
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
@@ -28,11 +34,14 @@ func TestMain(m *testing.M) {
 
 func TestQueryBlocksUntilMatchingSpanArrives(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	result := make(chan queryResponse, 1)
 	go func() {
-		result <- queryTrace(t, client, origin, traceQuery{TraceID: testTraceID, RequiredSpans: []requiredSpan{{ServiceName: "worker", Name: "job", MinCount: 1}}})
+		result <- queryTrace(t, client, origin, traceQuery{
+			TraceID:       testTraceID,
+			RequiredSpans: []requiredSpan{{ServiceName: testWorkerService, Name: "job", MinCount: 1}},
+		})
 	}()
 
 	select {
@@ -40,7 +49,13 @@ func TestQueryBlocksUntilMatchingSpanArrives(t *testing.T) {
 		t.Fatal("query completed before ingestion")
 	case <-time.After(20 * time.Millisecond):
 	}
-	ingest(t, client, origin, testTraces(t, testTraceID, "0000000000000001", "worker", "job"), false)
+	ingest(
+		t,
+		client,
+		origin,
+		testTraces(t, testTraceID, "0000000000000001", testWorkerService, "job"),
+		false,
+	)
 	select {
 	case response := <-result:
 		if len(response.Spans) != 1 || response.Revision != 1 {
@@ -53,23 +68,53 @@ func TestQueryBlocksUntilMatchingSpanArrives(t *testing.T) {
 
 func TestJSONAndProtobufIngestionAndMinCount(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
-	ingest(t, client, origin, testTraces(t, testTraceID, "0000000000000001", "api", "request"), false)
-	ingest(t, client, origin, testTraces(t, testTraceID, "0000000000000002", "api", "request"), true)
-	response := queryTrace(t, client, origin, traceQuery{TraceID: testTraceID, RequiredSpans: []requiredSpan{{ServiceName: "api", Name: "request", MinCount: 2}}})
+	ingest(
+		t,
+		client,
+		origin,
+		testTraces(t, testTraceID, "0000000000000001", testAPIService, testRequestSpan),
+		false,
+	)
+	ingest(
+		t,
+		client,
+		origin,
+		testTraces(t, testTraceID, "0000000000000002", testAPIService, testRequestSpan),
+		true,
+	)
+	response := queryTrace(
+		t,
+		client,
+		origin,
+		traceQuery{
+			TraceID:       testTraceID,
+			RequiredSpans: []requiredSpan{{ServiceName: testAPIService, Name: testRequestSpan, MinCount: 2}},
+		},
+	)
 	if len(response.Spans) != 2 || len(response.ResourceSpans) == 0 {
-		t.Fatalf("response spans/resourceSpans = %d/%s", len(response.Spans), response.ResourceSpans)
+		t.Fatalf(
+			"response spans/resourceSpans = %d/%s",
+			len(response.Spans),
+			response.ResourceSpans,
+		)
 	}
 }
 
 func TestJSONAndProtobufMetricIngestion(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	for _, asJSON := range []bool{false, true} {
 		metrics := pmetric.NewMetrics()
-		metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty().Metrics().AppendEmpty().SetName("test.metric")
+		metrics.ResourceMetrics().
+			AppendEmpty().
+			ScopeMetrics().
+			AppendEmpty().
+			Metrics().
+			AppendEmpty().
+			SetName("test.metric")
 		exportRequest := pmetricotlp.NewExportRequestFromMetrics(metrics)
 		var body []byte
 		var contentType string
@@ -84,7 +129,12 @@ func TestJSONAndProtobufMetricIngestion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("encode metric request: %v", err)
 		}
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1/metrics", bytes.NewReader(body))
+		request, err := http.NewRequestWithContext(
+			t.Context(),
+			http.MethodPost,
+			origin+"/v1/metrics",
+			bytes.NewReader(body),
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,12 +152,28 @@ func TestJSONAndProtobufMetricIngestion(t *testing.T) {
 
 func TestDifferentTraceDoesNotWakeQuery(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 80*time.Millisecond)
 	defer cancel()
-	requestBody, _ := json.Marshal(traceQuery{TraceID: testTraceID, RequiredSpans: []requiredSpan{{ServiceName: "api", Name: "request", MinCount: 1}}})
-	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, origin+"/api/v1/traces/query", bytes.NewReader(requestBody))
+	requestBody, err := json.Marshal(
+		traceQuery{
+			TraceID:       testTraceID,
+			RequiredSpans: []requiredSpan{{ServiceName: testAPIService, Name: testRequestSpan, MinCount: 1}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		origin+"/api/v1/traces/query",
+		bytes.NewReader(requestBody),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.Header.Set("Content-Type", "application/json")
 	done := make(chan int, 1)
 	go func() {
@@ -119,7 +185,13 @@ func TestDifferentTraceDoesNotWakeQuery(t *testing.T) {
 		defer response.Body.Close()
 		done <- response.StatusCode
 	}()
-	ingest(t, client, origin, testTraces(t, "1123456789abcdef0123456789abcdef", "0000000000000001", "api", "request"), false)
+	ingest(
+		t,
+		client,
+		origin,
+		testTraces(t, "1123456789abcdef0123456789abcdef", "0000000000000001", testAPIService, testRequestSpan),
+		false,
+	)
 	if status := <-done; status == http.StatusOK {
 		t.Fatal("different trace ingestion completed query")
 	}
@@ -127,22 +199,44 @@ func TestDifferentTraceDoesNotWakeQuery(t *testing.T) {
 
 func TestQueryParksUntilParentArrivesAcrossBatches(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	result := make(chan queryResponse, 1)
 	go func() {
-		result <- queryTrace(t, client, origin, traceQuery{TraceID: testTraceID, RequiredSpans: []requiredSpan{{ServiceName: "worker", Name: "child", MinCount: 1}}})
+		result <- queryTrace(t, client, origin, traceQuery{
+			TraceID:       testTraceID,
+			RequiredSpans: []requiredSpan{{ServiceName: testWorkerService, Name: "child", MinCount: 1}},
+		})
 	}()
-	ingest(t, client, origin, testTracesWithParent(t, testTraceID, "0000000000000002", "0000000000000001", "worker", "child"), false)
+	ingest(
+		t,
+		client,
+		origin,
+		testTracesWithParent(
+			t,
+			"0000000000000002",
+			"0000000000000001",
+			testWorkerService,
+			"child",
+		),
+		false,
+	)
 	select {
 	case <-result:
 		t.Fatal("query completed while child parent was unresolved")
 	case <-time.After(20 * time.Millisecond):
 	}
-	ingest(t, client, origin, testTraces(t, testTraceID, "0000000000000001", "worker", "parent"), false)
+	ingest(
+		t,
+		client,
+		origin,
+		testTraces(t, testTraceID, "0000000000000001", testWorkerService, "parent"),
+		false,
+	)
 	select {
 	case response := <-result:
-		if len(response.Spans) != 2 || !bytes.Contains(response.ResourceSpans, []byte("parentSpanId")) {
+		if len(response.Spans) != 2 ||
+			!bytes.Contains(response.ResourceSpans, []byte("parentSpanId")) {
 			t.Fatalf("parent relationship missing from response: %#v", response)
 		}
 	case <-time.After(time.Second):
@@ -152,22 +246,28 @@ func TestQueryParksUntilParentArrivesAcrossBatches(t *testing.T) {
 
 func TestConcurrentBatchesDoNotCompleteBeforeSharedParent(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	result := make(chan queryResponse, 1)
 	go func() {
 		result <- queryTrace(t, client, origin, traceQuery{
 			TraceID: testTraceID,
 			RequiredSpans: []requiredSpan{
-				{ServiceName: "worker", Name: "first child", MinCount: 1},
-				{ServiceName: "worker", Name: "second child", MinCount: 1},
+				{ServiceName: testWorkerService, Name: "first child", MinCount: 1},
+				{ServiceName: testWorkerService, Name: "second child", MinCount: 1},
 			},
 		})
 	}()
 	parentID := "0000000000000009"
 	batches := []ptrace.Traces{
-		testTracesWithParent(t, testTraceID, "0000000000000001", parentID, "worker", "first child"),
-		testTracesWithParent(t, testTraceID, "0000000000000002", parentID, "worker", "second child"),
+		testTracesWithParent(t, "0000000000000001", parentID, testWorkerService, "first child"),
+		testTracesWithParent(
+			t,
+			"0000000000000002",
+			parentID,
+			testWorkerService,
+			"second child",
+		),
 	}
 	done := make(chan struct{}, len(batches))
 	for _, batch := range batches {
@@ -184,7 +284,7 @@ func TestConcurrentBatchesDoNotCompleteBeforeSharedParent(t *testing.T) {
 		t.Fatal("query completed before shared parent arrived")
 	case <-time.After(20 * time.Millisecond):
 	}
-	ingest(t, client, origin, testTraces(t, testTraceID, parentID, "worker", "parent"), false)
+	ingest(t, client, origin, testTraces(t, testTraceID, parentID, testWorkerService, "parent"), false)
 	select {
 	case response := <-result:
 		if len(response.Spans) != 3 {
@@ -197,13 +297,21 @@ func TestConcurrentBatchesDoNotCompleteBeforeSharedParent(t *testing.T) {
 
 func TestAllowedExternalParent(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	parentID := "00000000000000aa"
-	ingest(t, client, origin, testTracesWithParent(t, testTraceID, "0000000000000001", parentID, "api", "request"), false)
+	ingest(
+		t,
+		client,
+		origin,
+		testTracesWithParent(t, "0000000000000001", parentID, testAPIService, testRequestSpan),
+		false,
+	)
 	response := queryTrace(t, client, origin, traceQuery{
-		TraceID:                      testTraceID,
-		RequiredSpans:                []requiredSpan{{ServiceName: "api", Name: "request", MinCount: 1}},
+		TraceID: testTraceID,
+		RequiredSpans: []requiredSpan{
+			{ServiceName: testAPIService, Name: testRequestSpan, MinCount: 1},
+		},
 		AllowedExternalParentSpanIDs: []string{parentID},
 	})
 	if response.Spans[0].ParentSpanID != parentID {
@@ -213,16 +321,23 @@ func TestAllowedExternalParent(t *testing.T) {
 
 func TestUnresolvedParentReturnsDetailedError(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	parentID := "00000000000000bb"
-	ingest(t, client, origin, testTracesWithParent(t, testTraceID, "0000000000000001", parentID, "api", "request"), false)
+	ingest(
+		t,
+		client,
+		origin,
+		testTracesWithParent(t, "0000000000000001", parentID, testAPIService, testRequestSpan),
+		false,
+	)
 	status, body := rawQuery(t, client, origin, traceQuery{
 		TraceID:             testTraceID,
-		RequiredSpans:       []requiredSpan{{ServiceName: "api", Name: "request", MinCount: 1}},
+		RequiredSpans:       []requiredSpan{{ServiceName: testAPIService, Name: testRequestSpan, MinCount: 1}},
 		TimeoutMilliseconds: 20,
 	})
-	if status != http.StatusConflict || !bytes.Contains(body, []byte(parentID)) || !bytes.Contains(body, []byte("0000000000000001")) {
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(parentID)) ||
+		!bytes.Contains(body, []byte("0000000000000001")) {
 		t.Fatalf("unresolved parent response = %d %s", status, body)
 	}
 }
@@ -230,27 +345,33 @@ func TestUnresolvedParentReturnsDetailedError(t *testing.T) {
 func TestSelfParentAndCyclesFailGraphValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name  string
-		spans ptrace.Traces
-		want  string
+		name    string
+		parents []string
+		want    string
 	}{
-		{name: "self parent", spans: testTracesWithParent(t, testTraceID, "0000000000000001", "0000000000000001", "api", "request"), want: "own parent"},
-		{name: "two span cycle", spans: mergeTraces(
-			testTracesWithParent(t, testTraceID, "0000000000000001", "0000000000000002", "api", "request"),
-			testTracesWithParent(t, testTraceID, "0000000000000002", "0000000000000001", "api", "child"),
-		), want: "parent cycle"},
-		{name: "longer cycle", spans: mergeTraces(
-			testTracesWithParent(t, testTraceID, "0000000000000001", "0000000000000002", "api", "request"),
-			testTracesWithParent(t, testTraceID, "0000000000000002", "0000000000000003", "api", "middle"),
-			testTracesWithParent(t, testTraceID, "0000000000000003", "0000000000000001", "api", "last"),
-		), want: "parent cycle"},
+		{name: "self parent", parents: []string{"0000000000000001"}, want: "own parent"},
+		{name: "two span cycle", parents: []string{"0000000000000002", "0000000000000001"}, want: "parent cycle"},
+		{
+			name: "longer cycle", parents: []string{"0000000000000002", "0000000000000003", "0000000000000001"},
+			want: "parent cycle",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, origin := startTestServer(t, Config{})
+			t.Parallel()
+			origin := startTestServer(t, Config{})
 			client := newTestClient(t)
-			ingest(t, client, origin, test.spans, false)
-			status, body := rawQuery(t, client, origin, traceQuery{TraceID: testTraceID, RequiredSpans: []requiredSpan{{ServiceName: "api", Name: "request", MinCount: 1}}})
+			var batches []ptrace.Traces
+			for index, parent := range test.parents {
+				batches = append(batches, testTracesWithParent(
+					t, fmt.Sprintf("%016x", index+1), parent, testAPIService, testRequestSpan,
+				))
+			}
+			ingest(t, client, origin, mergeTraces(batches...), false)
+			status, body := rawQuery(t, client, origin, traceQuery{
+				TraceID:       testTraceID,
+				RequiredSpans: []requiredSpan{{ServiceName: testAPIService, Name: testRequestSpan, MinCount: 1}},
+			})
 			if status != http.StatusConflict || !bytes.Contains(body, []byte(test.want)) {
 				t.Fatalf("graph response = %d %s, want %q", status, body, test.want)
 			}
@@ -260,12 +381,33 @@ func TestSelfParentAndCyclesFailGraphValidation(t *testing.T) {
 
 func TestCrossTraceParentIsNotAccepted(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
 	parentID := "0000000000000009"
-	ingest(t, client, origin, testTraces(t, "1123456789abcdef0123456789abcdef", parentID, "api", "other trace parent"), false)
-	ingest(t, client, origin, testTracesWithParent(t, testTraceID, "0000000000000001", parentID, "api", "request"), false)
-	status, body := rawQuery(t, client, origin, traceQuery{TraceID: testTraceID, RequiredSpans: []requiredSpan{{ServiceName: "api", Name: "request", MinCount: 1}}, TimeoutMilliseconds: 20})
+	ingest(
+		t,
+		client,
+		origin,
+		testTraces(t, "1123456789abcdef0123456789abcdef", parentID, testAPIService, "other trace parent"),
+		false,
+	)
+	ingest(
+		t,
+		client,
+		origin,
+		testTracesWithParent(t, "0000000000000001", parentID, testAPIService, testRequestSpan),
+		false,
+	)
+	status, body := rawQuery(
+		t,
+		client,
+		origin,
+		traceQuery{
+			TraceID:             testTraceID,
+			RequiredSpans:       []requiredSpan{{ServiceName: testAPIService, Name: testRequestSpan, MinCount: 1}},
+			TimeoutMilliseconds: 20,
+		},
+	)
 	if status != http.StatusConflict || !bytes.Contains(body, []byte("missing parent")) {
 		t.Fatalf("cross-trace parent response = %d %s", status, body)
 	}
@@ -273,12 +415,16 @@ func TestCrossTraceParentIsNotAccepted(t *testing.T) {
 
 func TestDuplicateSpanProducesDiagnostic(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
-	traces := testTraces(t, testTraceID, "0000000000000001", "api", "request")
+	traces := testTraces(t, testTraceID, "0000000000000001", testAPIService, testRequestSpan)
 	ingest(t, client, origin, traces, false)
 	ingest(t, client, origin, traces, false)
-	response, err := client.Get(origin + "/api/v1/diagnostics")
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, origin+"/api/v1/diagnostics", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,26 +436,48 @@ func TestDuplicateSpanProducesDiagnostic(t *testing.T) {
 
 func TestConflictingSpanProducesDiagnostic(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{})
+	origin := startTestServer(t, Config{})
 	client := newTestClient(t)
-	ingest(t, client, origin, testTraces(t, testTraceID, "0000000000000001", "api", "first"), false)
-	ingest(t, client, origin, testTraces(t, testTraceID, "0000000000000001", "api", "conflict"), false)
-	response, err := client.Get(origin + "/api/v1/diagnostics")
+	ingest(t, client, origin, testTraces(t, testTraceID, "0000000000000001", testAPIService, "first"), false)
+	ingest(
+		t,
+		client,
+		origin,
+		testTraces(t, testTraceID, "0000000000000001", testAPIService, "conflict"),
+		false,
+	)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, origin+"/api/v1/diagnostics", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(response.Body)
-	if response.StatusCode != http.StatusConflict || !bytes.Contains(body, []byte("conflicting_span_id")) {
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusConflict ||
+		!bytes.Contains(body, []byte("conflicting_span_id")) {
 		t.Fatalf("conflict diagnostics = %d %s", response.StatusCode, body)
 	}
 }
 
 func TestMalformedRequestsAreControlled(t *testing.T) {
 	t.Parallel()
-	_, origin := startTestServer(t, Config{MaxBodyBytes: 32})
+	origin := startTestServer(t, Config{MaxBodyBytes: 32})
 	client := newTestClient(t)
-	request, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1/traces", bytes.NewBufferString("not otlp"))
+	request, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		origin+"/v1/traces",
+		bytes.NewBufferString("not otlp"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.Header.Set("Content-Type", "text/plain")
 	response, err := client.Do(request)
 	if err != nil {
@@ -321,10 +489,10 @@ func TestMalformedRequestsAreControlled(t *testing.T) {
 	}
 }
 
-func startTestServer(t *testing.T, config Config) (*http.Server, string) {
+func startTestServer(t *testing.T, config Config) string {
 	t.Helper()
 	config.DatabasePath = filepath.Join(t.TempDir(), "spaniel.sqlite")
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,18 +502,24 @@ func startTestServer(t *testing.T, config Config) (*http.Server, string) {
 	}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
-	return server, "http://" + listener.Addr().String()
+	return "http://" + listener.Addr().String()
 }
 
 func newTestClient(t *testing.T) *http.Client {
 	t.Helper()
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := &http.Transport{}
 	client := &http.Client{Transport: transport}
 	t.Cleanup(client.CloseIdleConnections)
 	return client
 }
 
-func testTraces(t *testing.T, traceID string, spanID string, serviceName string, name string) ptrace.Traces {
+func testTraces(
+	t *testing.T,
+	traceID string,
+	spanID string,
+	serviceName string,
+	name string,
+) ptrace.Traces {
 	t.Helper()
 	traces := ptrace.NewTraces()
 	resourceSpans := traces.ResourceSpans().AppendEmpty()
@@ -369,9 +543,15 @@ func testTraces(t *testing.T, traceID string, spanID string, serviceName string,
 	return traces
 }
 
-func testTracesWithParent(t *testing.T, traceID string, spanID string, parentID string, serviceName string, name string) ptrace.Traces {
+func testTracesWithParent(
+	t *testing.T,
+	spanID string,
+	parentID string,
+	serviceName string,
+	name string,
+) ptrace.Traces {
 	t.Helper()
-	traces := testTraces(t, traceID, spanID, serviceName, name)
+	traces := testTraces(t, testTraceID, spanID, serviceName, name)
 	parentBytes, err := hex.DecodeString(parentID)
 	if err != nil {
 		t.Fatal(err)
@@ -405,7 +585,15 @@ func ingest(t *testing.T, client *http.Client, origin string, traces ptrace.Trac
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1/traces", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		origin+"/v1/traces",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.Header.Set("Content-Type", contentType)
 	response, err := client.Do(request)
 	if err != nil {
@@ -413,27 +601,22 @@ func ingest(t *testing.T, client *http.Client, origin string, traces ptrace.Trac
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		message, _ := io.ReadAll(response.Body)
+		message, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 		t.Fatalf("ingest status = %d: %s", response.StatusCode, message)
 	}
 }
 
 func queryTrace(t *testing.T, client *http.Client, origin string, query traceQuery) queryResponse {
 	t.Helper()
-	body, _ := json.Marshal(query)
-	request, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/api/v1/traces/query", bytes.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	response, err := client.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		message, _ := io.ReadAll(response.Body)
-		t.Fatalf("query status = %d: %s", response.StatusCode, message)
+	status, body := rawQuery(t, client, origin, query)
+	if status != http.StatusOK {
+		t.Fatalf("query status = %d: %s", status, body)
 	}
 	var result queryResponse
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		t.Fatal(err)
 	}
 	return result
@@ -441,14 +624,28 @@ func queryTrace(t *testing.T, client *http.Client, origin string, query traceQue
 
 func rawQuery(t *testing.T, client *http.Client, origin string, query traceQuery) (int, []byte) {
 	t.Helper()
-	body, _ := json.Marshal(query)
-	request, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/api/v1/traces/query", bytes.NewReader(body))
+	body, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		origin+"/api/v1/traces/query",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return response.StatusCode, responseBody
 }

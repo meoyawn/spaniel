@@ -17,11 +17,9 @@ jobs:
         with:
           fetch-depth: 0
           filter: blob:none
-      - uses: actions/setup-go@v7
-        id: go
+      - uses: jdx/mise-action@v5
         with:
-          go-version-file: go.mod
-          cache: false
+          version: '2026.11.7'
       - name: Restore Go modules, compiler, and linter caches
         id: go-cache
         uses: actions/cache@v6
@@ -30,13 +28,9 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          key: go-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
-            go-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-
-            go-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-
-      - uses: moonrepo/setup-toolchain@v0
-        with:
-          moon-version: "2.5.5"
+            go-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'go.mod', 'go.sum') }}-
       - name: Check affected tasks
         id: ci
         run: moon ci

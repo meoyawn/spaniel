@@ -15,6 +15,11 @@ import (
 	"github.com/meoyawn/spaniel"
 )
 
+const (
+	shutdownTimeout    = 10 * time.Second
+	healthcheckTimeout = 2 * time.Second
+)
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -46,7 +51,7 @@ func run() error {
 		return nil
 	case <-ctx.Done():
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shut down Spaniel on %q: %w", *addr, err)
@@ -58,20 +63,25 @@ func run() error {
 }
 
 func checkHealth(rawURL string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return fmt.Errorf("build Spaniel health request %q: %w", rawURL, err)
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: healthcheckTimeout}
 	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("request Spaniel health URL %q: %w", rawURL, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("spaniel health URL %q status = %d, want %d", rawURL, response.StatusCode, http.StatusOK)
+		return fmt.Errorf(
+			"spaniel health URL %q status = %d, want %d",
+			rawURL,
+			response.StatusCode,
+			http.StatusOK,
+		)
 	}
 	return nil
 }

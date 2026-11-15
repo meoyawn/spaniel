@@ -1,3 +1,4 @@
+tags: [go-lint]
 toolchains:
   default: system
 fileGroups:
@@ -50,15 +51,6 @@ tasks:
       - go.mod
       - go.sum
       - .golangci.yaml
-    script: |-
-      set -euo pipefail
-      if [[ "${CI:-}" == "true" ]]; then
-        test -z "$(gofmt -l .)"
-      else
-        gofmt -w .
-      fi
-      go vet ./...
-      go tool golangci-lint run --allow-parallel-runners ./...
     options:
       cache: true
   check:

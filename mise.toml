@@ -1,0 +1,4 @@
+[tools]
+go = "1.27.4"
+node = "26.5.0"
+"aqua:moonrepo/moon" = "2.5.6"

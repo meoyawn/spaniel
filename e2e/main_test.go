@@ -38,17 +38,30 @@ func TestSQLiteServerHTTP(t *testing.T) {
 	client := newClient(t)
 	server, origin := startServer(t, client, databasePath)
 	ingestTrace(t, client, origin)
+	assertGCXTrace(t, readOK(t, client, origin+"/api/v1/traces/"+testTraceID))
+	assertJaegerTrace(t, readOK(t, client, origin+"/api/v1/traces/"+testTraceID+"?format=jaeger"))
+	shutdownServer(t, client, server)
+	_, restartedOrigin := startServer(t, client, databasePath)
+	readOK(t, client, restartedOrigin+"/api/v1/traces/"+testTraceID)
+}
 
-	response := get(t, client, origin+"/api/v1/traces/"+testTraceID)
-	gcx, err := io.ReadAll(response.Body)
-	_ = response.Body.Close()
+func readOK(t *testing.T, client *http.Client, rawURL string) []byte {
+	t.Helper()
+	response := get(t, client, rawURL)
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("GET trace status = %d: %s", response.StatusCode, gcx)
+		t.Fatalf("GET trace status = %d: %s", response.StatusCode, body)
 	}
-	var gcxTrace struct {
+	return body
+}
+
+func assertGCXTrace(t *testing.T, body []byte) {
+	t.Helper()
+	var trace struct {
 		Batches []struct {
 			ScopeSpans []struct {
 				Spans []struct {
@@ -57,52 +70,45 @@ func TestSQLiteServerHTTP(t *testing.T) {
 			} `json:"scopeSpans"`
 		} `json:"batches"`
 	}
-	decodeJSON(t, gcx, &gcxTrace)
-	if len(gcxTrace.Batches) != 2 {
-		t.Fatalf("gcx trace = %s", gcx)
+	decodeJSON(t, body, &trace)
+	if len(trace.Batches) != 2 {
+		t.Fatalf("gcx trace = %s", body)
 	}
-	for _, batch := range gcxTrace.Batches {
-		if len(batch.ScopeSpans) != 1 || len(batch.ScopeSpans[0].Spans) != 1 || batch.ScopeSpans[0].Spans[0].TraceID != testTraceID {
-			t.Fatalf("gcx trace = %s", gcx)
+	for _, batch := range trace.Batches {
+		if len(batch.ScopeSpans) != 1 || len(batch.ScopeSpans[0].Spans) != 1 ||
+			batch.ScopeSpans[0].Spans[0].TraceID != testTraceID {
+			t.Fatalf("gcx trace = %s", body)
 		}
 	}
+}
 
-	response = get(t, client, origin+"/api/v1/traces/"+testTraceID+"?format=jaeger")
-	jaeger, err := io.ReadAll(response.Body)
-	_ = response.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("GET Jaeger trace status = %d: %s", response.StatusCode, jaeger)
-	}
-	var jaegerTrace struct {
+func assertJaegerTrace(t *testing.T, body []byte) {
+	t.Helper()
+	var trace struct {
 		Data []struct {
 			TraceID   string         `json:"traceID"`
 			Spans     []any          `json:"spans"`
 			Processes map[string]any `json:"processes"`
 		} `json:"data"`
 	}
-	decodeJSON(t, jaeger, &jaegerTrace)
-	if len(jaegerTrace.Data) != 1 || jaegerTrace.Data[0].TraceID != testTraceID ||
-		len(jaegerTrace.Data[0].Spans) != 2 || len(jaegerTrace.Data[0].Processes) != 1 {
-		t.Fatalf("jaeger trace = %s", jaeger)
-	}
-
-	shutdownServer(t, client, server)
-	_, restartedOrigin := startServer(t, client, databasePath)
-	response = get(t, client, restartedOrigin+"/api/v1/traces/"+testTraceID)
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("persisted trace status = %d: %s", response.StatusCode, body)
+	decodeJSON(t, body, &trace)
+	if len(trace.Data) != 1 || trace.Data[0].TraceID != testTraceID ||
+		len(trace.Data[0].Spans) != 2 || len(trace.Data[0].Processes) != 1 {
+		t.Fatalf("jaeger trace = %s", body)
 	}
 }
 
 func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 	t.Parallel()
-	temporaryDirectory := t.TempDir()
-	databasePath := filepath.Join(temporaryDirectory, "spaniel.sqlite")
+	databasePath := filepath.Join(t.TempDir(), "spaniel.sqlite")
+	client := newClient(t)
+	origin := startCommand(t, client, databasePath)
+	ingestTrace(t, client, origin)
+	assertGCXTrace(t, readOK(t, client, origin+"/api/v1/traces/"+testTraceID))
+}
+
+func startCommand(t *testing.T, client *http.Client, databasePath string) string {
+	t.Helper()
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -129,11 +135,20 @@ func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 		}
 	})
 
-	client := newClient(t)
 	origin := "http://" + address
+	waitForHealth(t, client, origin, serverOutput)
+	return origin
+}
+
+func waitForHealth(t *testing.T, client *http.Client, origin string, serverOutput *bytes.Buffer) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		response, requestErr := client.Get(origin + "/healthz")
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, origin+"/healthz", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, requestErr := client.Do(request)
 		if requestErr == nil {
 			_ = response.Body.Close()
 			if response.StatusCode == http.StatusOK {
@@ -145,32 +160,6 @@ func TestCommandUsesDefaultSQLitePathAndGCXFormat(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	ingestTrace(t, client, origin)
-
-	response := get(t, client, origin+"/api/v1/traces/"+testTraceID)
-	output, err := io.ReadAll(response.Body)
-	_ = response.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("GET trace status = %d: %s", response.StatusCode, output)
-	}
-	var trace struct {
-		Batches []struct {
-			ScopeSpans []struct {
-				Spans []struct {
-					TraceID string `json:"traceId"`
-				} `json:"spans"`
-			} `json:"scopeSpans"`
-		} `json:"batches"`
-	}
-	decodeJSON(t, output, &trace)
-	if len(trace.Batches) != 2 || len(trace.Batches[0].ScopeSpans) != 1 ||
-		len(trace.Batches[0].ScopeSpans[0].Spans) != 1 ||
-		trace.Batches[0].ScopeSpans[0].Spans[0].TraceID != testTraceID {
-		t.Fatalf("default GCX trace = %s", output)
-	}
 }
 
 func startServer(t *testing.T, client *http.Client, databasePath string) (*http.Server, string) {
@@ -179,7 +168,10 @@ func startServer(t *testing.T, client *http.Client, databasePath string) (*http.
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := spaniel.NewServer(listener.Addr().String(), spaniel.Config{DatabasePath: databasePath})
+	server, err := spaniel.NewServer(
+		listener.Addr().String(),
+		spaniel.Config{DatabasePath: databasePath},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,13 +218,20 @@ func ingestTrace(t *testing.T, client *http.Client, origin string) {
 	secondSpan.SetSpanID(spanID(t, "fedcba9876543210"))
 	secondSpan.SetParentSpanID(spanID(t, testSpanID))
 	secondSpan.SetName("persisted child span")
-	secondSpan.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 500_000_000)))
+	secondSpan.SetStartTimestamp(
+		pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 500_000_000)),
+	)
 	secondSpan.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_001, 0)))
 	payload, err := ptraceotlp.NewExportRequestFromTraces(traces).MarshalProto()
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1/traces", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		origin+"/v1/traces",
+		bytes.NewReader(payload),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

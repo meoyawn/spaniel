@@ -24,6 +24,8 @@ const (
 	defaultQueryTimeout     = 30 * time.Second
 	readHeaderTimeout       = 5 * time.Second
 	traceIDLength           = 32
+	spanIDLength            = 16
+	jsonContentType         = "application/json"
 )
 
 // DefaultDatabasePath returns the configured default SQLite database path.
@@ -98,7 +100,7 @@ func NewServer(addr string, config Config) (*http.Server, error) {
 		config.MaxBodyBytes = defaultMaxBodyBytes
 	}
 
-	traceStore, err := newStore(config.DatabasePath)
+	traceStore, err := newStore(context.Background(), config.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open Spaniel database %q: %w", config.DatabasePath, err)
 	}
@@ -126,12 +128,16 @@ func (handler *serverHandler) ingestMetrics(response http.ResponseWriter, reques
 	exportRequest := pmetricotlp.NewExportRequest()
 	contentType := contentType(request)
 	switch contentType {
-	case "application/json":
+	case jsonContentType:
 		err = exportRequest.UnmarshalJSON(body)
 	case "application/x-protobuf", "application/protobuf":
 		err = exportRequest.UnmarshalProto(body)
 	default:
-		http.Error(response, "unsupported OTLP Content-Type "+strconv.Quote(contentType), http.StatusUnsupportedMediaType)
+		http.Error(
+			response,
+			"unsupported OTLP Content-Type "+strconv.Quote(contentType),
+			http.StatusUnsupportedMediaType,
+		)
 		return
 	}
 	if err != nil {
@@ -142,16 +148,24 @@ func (handler *serverHandler) ingestMetrics(response http.ResponseWriter, reques
 	exportResponse := pmetricotlp.NewExportResponse()
 	encoded, err := marshalMetricResponse(exportResponse, contentType, response)
 	if err != nil {
-		http.Error(response, "encode OTLP metric response: "+err.Error(), http.StatusInternalServerError)
+		http.Error(
+			response,
+			"encode OTLP metric response: "+err.Error(),
+			http.StatusInternalServerError,
+		)
 		return
 	}
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(encoded)
 }
 
-func marshalMetricResponse(exportResponse pmetricotlp.ExportResponse, contentType string, response http.ResponseWriter) ([]byte, error) {
-	if contentType == "application/json" {
-		response.Header().Set("Content-Type", "application/json")
+func marshalMetricResponse(
+	exportResponse pmetricotlp.ExportResponse,
+	contentType string,
+	response http.ResponseWriter,
+) ([]byte, error) {
+	if contentType == jsonContentType {
+		response.Header().Set("Content-Type", jsonContentType)
 		return exportResponse.MarshalJSON()
 	}
 	response.Header().Set("Content-Type", "application/x-protobuf")
@@ -167,12 +181,16 @@ func (handler *serverHandler) ingest(response http.ResponseWriter, request *http
 	exportRequest := ptraceotlp.NewExportRequest()
 	requestContentType := contentType(request)
 	switch requestContentType {
-	case "application/json":
+	case jsonContentType:
 		err = exportRequest.UnmarshalJSON(body)
 	case "application/x-protobuf", "application/protobuf":
 		err = exportRequest.UnmarshalProto(body)
 	default:
-		http.Error(response, "unsupported OTLP Content-Type "+strconv.Quote(requestContentType), http.StatusUnsupportedMediaType)
+		http.Error(
+			response,
+			"unsupported OTLP Content-Type "+strconv.Quote(requestContentType),
+			http.StatusUnsupportedMediaType,
+		)
 		return
 	}
 	if err != nil {
@@ -193,16 +211,24 @@ func (handler *serverHandler) ingest(response http.ResponseWriter, request *http
 	}
 	encoded, err := marshalTraceResponse(exportResponse, requestContentType, response)
 	if err != nil {
-		http.Error(response, "encode OTLP trace response: "+err.Error(), http.StatusInternalServerError)
+		http.Error(
+			response,
+			"encode OTLP trace response: "+err.Error(),
+			http.StatusInternalServerError,
+		)
 		return
 	}
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(encoded)
 }
 
-func marshalTraceResponse(exportResponse ptraceotlp.ExportResponse, contentType string, response http.ResponseWriter) ([]byte, error) {
-	if contentType == "application/json" {
-		response.Header().Set("Content-Type", "application/json")
+func marshalTraceResponse(
+	exportResponse ptraceotlp.ExportResponse,
+	contentType string,
+	response http.ResponseWriter,
+) ([]byte, error) {
+	if contentType == jsonContentType {
+		response.Header().Set("Content-Type", jsonContentType)
 		return exportResponse.MarshalJSON()
 	}
 	response.Header().Set("Content-Type", "application/x-protobuf")
@@ -223,25 +249,30 @@ func (handler *serverHandler) query(response http.ResponseWriter, request *http.
 	}
 	traceID, err := canonicalTraceID(query.TraceID)
 	if err != nil {
-		handler.store.addDiagnostic(Diagnostic{Kind: "malformed_trace_id", Message: err.Error()})
-		http.Error(response, err.Error(), http.StatusBadRequest)
+		handler.rejectTraceID(response, request, err)
 		return
 	}
 	if len(query.RequiredSpans) == 0 {
-		http.Error(response, "requiredSpans must contain at least one selector", http.StatusBadRequest)
+		http.Error(
+			response,
+			"requiredSpans must contain at least one selector",
+			http.StatusBadRequest,
+		)
 		return
 	}
-	for index, required := range query.RequiredSpans {
-		if required.ServiceName == "" || required.Name == "" || required.MinCount < 1 {
-			http.Error(response, fmt.Sprintf("requiredSpans[%d] must have non-empty serviceName/name and minCount >= 1", index), http.StatusBadRequest)
-			return
-		}
+	if err := validateRequiredSpans(query.RequiredSpans); err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
 	}
 	allowedExternalParents := make(map[string]bool, len(query.AllowedExternalParentSpanIDs))
 	for index, parentID := range query.AllowedExternalParentSpanIDs {
 		canonical, canonicalErr := canonicalSpanID(parentID)
 		if canonicalErr != nil {
-			http.Error(response, fmt.Sprintf("allowedExternalParentSpanIds[%d]: %v", index, canonicalErr), http.StatusBadRequest)
+			http.Error(
+				response,
+				fmt.Sprintf("allowedExternalParentSpanIds[%d]: %v", index, canonicalErr),
+				http.StatusBadRequest,
+			)
 			return
 		}
 		allowedExternalParents[canonical] = true
@@ -254,10 +285,13 @@ func (handler *serverHandler) query(response http.ResponseWriter, request *http.
 	if query.TimeoutMilliseconds > 0 {
 		queryTimeout = time.Duration(query.TimeoutMilliseconds) * time.Millisecond
 	}
-	queryContext, cancel := context.WithTimeout(request.Context(), queryTimeout)
-	defer cancel()
-
-	result, status, err := handler.store.wait(queryContext, traceID, query.RequiredSpans, allowedExternalParents)
+	result, status, err := handler.store.wait(
+		request.Context(),
+		queryTimeout,
+		traceID,
+		query.RequiredSpans,
+		allowedExternalParents,
+	)
 	if err != nil {
 		http.Error(response, err.Error(), status)
 		return
@@ -277,8 +311,7 @@ func (handler *serverHandler) snapshot(response http.ResponseWriter, request *ht
 	}
 	traceID, err := canonicalTraceID(request.PathValue("traceId"))
 	if err != nil {
-		handler.store.addDiagnostic(Diagnostic{Kind: "malformed_trace_id", Message: err.Error()})
-		http.Error(response, err.Error(), http.StatusBadRequest)
+		handler.rejectTraceID(response, request, err)
 		return
 	}
 	record, found, err := handler.store.loadRecord(request.Context(), traceID)
@@ -292,10 +325,14 @@ func (handler *serverHandler) snapshot(response http.ResponseWriter, request *ht
 	}
 	encoded, err := marshalTraceJSON(traceID, format, record)
 	if err != nil {
-		http.Error(response, "render "+format.String()+" trace "+traceID+": "+err.Error(), http.StatusInternalServerError)
+		http.Error(
+			response,
+			"render "+format.String()+" trace "+traceID+": "+err.Error(),
+			http.StatusInternalServerError,
+		)
 		return
 	}
-	response.Header().Set("Content-Type", "application/json")
+	response.Header().Set("Content-Type", jsonContentType)
 	response.WriteHeader(http.StatusOK)
 	// The payload comes from encoding stored OTLP data as JSON, not from raw request input.
 	//nolint:gosec // The HTTP contract requires writing the encoded JSON unchanged.
@@ -327,10 +364,33 @@ func (handler *serverHandler) getDiagnostics(response http.ResponseWriter, reque
 	}{Revision: revision, Diagnostics: diagnostics})
 }
 
+func validateRequiredSpans(required []requiredSpan) error {
+	for index, selector := range required {
+		if selector.ServiceName == "" || selector.Name == "" || selector.MinCount < 1 {
+			return fmt.Errorf("requiredSpans[%d] must have non-empty serviceName/name and minCount >= 1", index)
+		}
+	}
+	return nil
+}
+
+func (handler *serverHandler) rejectTraceID(response http.ResponseWriter, request *http.Request, cause error) {
+	diagnostic := Diagnostic{Kind: "malformed_trace_id", Message: cause.Error()}
+	if err := handler.store.addDiagnostic(request.Context(), diagnostic); err != nil {
+		http.Error(response, "record malformed trace ID: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	http.Error(response, cause.Error(), http.StatusBadRequest)
+}
+
 func writeJSON(response http.ResponseWriter, status int, value any) {
-	response.Header().Set("Content-Type", "application/json")
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		http.Error(response, "encode JSON response: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	response.Header().Set("Content-Type", jsonContentType)
 	response.WriteHeader(status)
-	_ = json.NewEncoder(response).Encode(value)
+	_, _ = response.Write(append(encoded, '\n'))
 }
 
 func canonicalTraceID(value string) (string, error) {
@@ -345,7 +405,7 @@ func canonicalTraceID(value string) (string, error) {
 }
 
 func canonicalSpanID(value string) (string, error) {
-	if len(value) != 16 {
+	if len(value) != spanIDLength {
 		return "", fmt.Errorf("span ID %q must be 16 hexadecimal characters", value)
 	}
 	decoded, err := hex.DecodeString(value)
