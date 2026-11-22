@@ -68,19 +68,11 @@ linters:
       - linters:
           - gomoddirectives
         path: go.mod
-        text: github.com/meoyawn/cloudflare-cache|listenbox.app/local-s3
+        text: listenbox.app/local-s3
       - linters:
           - gomoddirectives
         path: go.mod
-        text: listenbox.app/stripe-mock|listenbox.app/google-oauth-mock|listenbox.app/turnstile-mock
-      - linters:
-          - gomoddirectives
-        path: go.mod
-        text: listenbox.app/youtube-data-api-v3/mock
-      - linters:
-          - gomoddirectives
-        path: go.mod
-        text: listenbox.app/youtube-web-mock
+        text: github.com/meoyawn/mock-servers/
 
 issues:
   max-issues-per-linter: 0
