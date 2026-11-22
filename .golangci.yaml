@@ -68,7 +68,7 @@ linters:
       - linters:
           - gomoddirectives
         path: go.mod
-        text: listenbox.app/cloudflare-cache|listenbox.app/local-s3
+        text: github.com/meoyawn/cloudflare-cache|listenbox.app/local-s3
       - linters:
           - gomoddirectives
         path: go.mod
