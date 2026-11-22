@@ -20,12 +20,16 @@ import (
 const (
 	databasePathEnvironment = "SPANIEL_DATABASE_PATH"
 	defaultDatabasePath     = "/tmp/spaniel/spaniel.sqlite"
-	defaultMaxBodyBytes     = 16 << 20
-	defaultQueryTimeout     = 30 * time.Second
-	readHeaderTimeout       = 5 * time.Second
-	traceIDLength           = 32
-	spanIDLength            = 16
-	jsonContentType         = "application/json"
+	// DefaultMaxStorageBytes bounds the SQLite database when Config leaves it unset.
+	DefaultMaxStorageBytes = 1 << 30
+	// DefaultStorageCheckInterval is how often a running server checks its size.
+	DefaultStorageCheckInterval = time.Minute
+	defaultMaxBodyBytes         = 16 << 20
+	defaultQueryTimeout         = 30 * time.Second
+	readHeaderTimeout           = 5 * time.Second
+	traceIDLength               = 32
+	spanIDLength                = 16
+	jsonContentType             = "application/json"
 )
 
 // DefaultDatabasePath returns the configured default SQLite database path.
@@ -40,6 +44,12 @@ func DefaultDatabasePath() string {
 type Config struct {
 	DatabasePath string
 	MaxBodyBytes int64
+	// MaxStorageBytes bounds the database's in-use pages. On launch and at each
+	// StorageCheckInterval, a database past it loses whole traces, oldest
+	// first, down to half the limit. Zero means DefaultMaxStorageBytes.
+	MaxStorageBytes int64
+	// StorageCheckInterval defaults to DefaultStorageCheckInterval.
+	StorageCheckInterval time.Duration
 }
 
 // Diagnostic records a rejected, incomplete, or otherwise noteworthy trace condition.
@@ -99,8 +109,22 @@ func NewServer(addr string, config Config) (*http.Server, error) {
 	if config.MaxBodyBytes == 0 {
 		config.MaxBodyBytes = defaultMaxBodyBytes
 	}
+	if config.MaxStorageBytes < 0 {
+		return nil, fmt.Errorf("spaniel max storage bytes %d is negative", config.MaxStorageBytes)
+	}
+	if config.MaxStorageBytes == 0 {
+		config.MaxStorageBytes = DefaultMaxStorageBytes
+	}
+	if config.StorageCheckInterval < 0 {
+		return nil, fmt.Errorf("spaniel storage check interval %s is negative", config.StorageCheckInterval)
+	}
+	if config.StorageCheckInterval == 0 {
+		config.StorageCheckInterval = DefaultStorageCheckInterval
+	}
 
-	traceStore, err := newStore(context.Background(), config.DatabasePath)
+	traceStore, err := newStore(context.Background(), config.DatabasePath, storageLimits{
+		MaxBytes: config.MaxStorageBytes, CheckInterval: config.StorageCheckInterval,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open Spaniel database %q: %w", config.DatabasePath, err)
 	}

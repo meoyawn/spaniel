@@ -121,6 +121,23 @@ spaniel -addr 127.0.0.1:4318
 Point an OTLP/HTTP exporter at `http://127.0.0.1:4318`. Spaniel accepts JSON
 and protobuf trace payloads.
 
+## Storage limit
+
+The SQLite database is bounded, 1 GiB by default. Set another limit with
+`-max-storage-bytes` or `SPANIEL_MAX_STORAGE_BYTES`:
+
+```sh
+spaniel -addr 127.0.0.1:4318 -max-storage-bytes 2147483648
+```
+
+Spaniel checks the database's in-use pages on launch and once a minute, never
+per write. Past the limit it deletes whole traces, oldest first, down to half
+the limit, so cleanup runs rarely and in bulk. A running server deletes in
+small transactions through the single writer, interleaved with ingestion,
+while queries keep reading from WAL. Freed pages are reused, so the file stays
+near the limit. On launch, an oversized file, for example after lowering the
+limit, is trimmed and vacuumed before the server accepts requests.
+
 ## Develop
 
 Run the complete check from the repository root:

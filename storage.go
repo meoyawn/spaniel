@@ -54,21 +54,26 @@ type writeRequest struct {
 }
 
 type writeResult struct {
+	evicted  int64
 	rejected int
 	messages []string
 	err      error
 }
 
 type store struct {
-	db            *sql.DB
-	writes        chan writeRequest
-	done          chan struct{}
-	closeOnce     sync.Once
-	notifications map[string]chan struct{}
-	notifyMu      sync.Mutex
+	db              *sql.DB
+	maxStorageBytes int64
+	checkInterval   time.Duration
+	stopEvictor     context.CancelFunc
+	evictorDone     chan struct{}
+	writes          chan writeRequest
+	done            chan struct{}
+	closeOnce       sync.Once
+	notifications   map[string]chan struct{}
+	notifyMu        sync.Mutex
 }
 
-func newStore(ctx context.Context, databasePath string) (*store, error) {
+func newStore(ctx context.Context, databasePath string, limits storageLimits) (*store, error) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), databaseDirectoryMode); err != nil {
 		return nil, fmt.Errorf("create SQLite directory for %q: %w", databasePath, err)
 	}
@@ -110,17 +115,30 @@ func newStore(ctx context.Context, databasePath string) (*store, error) {
 		}
 	}
 	result := &store{
-		db:            database,
-		writes:        make(chan writeRequest),
-		done:          make(chan struct{}),
-		notifications: make(map[string]chan struct{}),
+		db:              database,
+		maxStorageBytes: limits.MaxBytes,
+		checkInterval:   limits.CheckInterval,
+		evictorDone:     make(chan struct{}),
+		writes:          make(chan writeRequest),
+		done:            make(chan struct{}),
+		notifications:   make(map[string]chan struct{}),
+	}
+	if err := result.compactOversized(ctx); err != nil {
+		_ = database.Close()
+		return nil, err
 	}
 	go result.writeLoop()
+	evictorCtx, stopEvictor := context.WithCancel(context.WithoutCancel(ctx))
+	result.stopEvictor = stopEvictor
+	go result.evictLoop(evictorCtx)
 	return result, nil
 }
 
 func (traceStore *store) close() {
 	traceStore.closeOnce.Do(func() {
+		// The evictor submits writes, so it stops before the writer does.
+		traceStore.stopEvictor()
+		<-traceStore.evictorDone
 		close(traceStore.writes)
 		<-traceStore.done
 		_ = traceStore.db.Close()
